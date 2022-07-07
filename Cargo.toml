@@ -17,9 +17,9 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.55"
 # Note if you update these dependencies then also update xtask/Cargo.toml
-apollo-router = { git="https://github.com/apollographql/router.git", tag="v0.9.3" }
-apollo-router-core = { git="https://github.com/apollographql/router.git", tag="v0.9.3" }
+apollo-router = { git="https://github.com/apollographql/router.git", tag="v0.10.0" }
 async-trait = "0.1.52"
+futures = "0.3.21"
 jsonwebtoken = "8"
 reqwest = {version="0.11.10"}
 schemars = "0.8.10"

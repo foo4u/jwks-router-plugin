@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::time::Duration;
-use apollo_router_core::plugin::Plugin;
-use apollo_router_core::{
-    register_plugin, RouterRequest, RouterResponse, SubgraphRequest, SubgraphResponse, Context, ServiceBuilderExt
-};
+use apollo_router::graphql;
+use apollo_router::layers::ServiceBuilderExt;
+use apollo_router::plugin::Plugin;
+use apollo_router::register_plugin;
+use apollo_router::services::RouterRequest;
+use apollo_router::services::RouterResponse;
+use apollo_router::Context;
+use futures::stream::BoxStream;
 use jsonwebtoken::jwk::{JwkSet, AlgorithmParameters};
 use jsonwebtoken::{decode, decode_header, jwk, DecodingKey, Validation, Header, TokenData};
 use reqwest::StatusCode;
@@ -24,7 +28,9 @@ struct JwksManager{
     url: String,
 }
 
+/// JwksManager handles the JWKS for use with key validation and polling of an eternal JWKS JSON endpoint
 impl JwksManager {
+    /// Returns a new implementation of the JwksManager with a valid JWKS 
     async fn new(url: &str) -> Result<Self, BoxError>{       
         let jwks_string = JwksManager::fetch_jwks(url).await.unwrap(); 
         return Ok(Self{
@@ -34,16 +40,19 @@ impl JwksManager {
     }
 
     fn poll(&self) {
-        let mut poll_interval = tokio::time::interval(Duration::from_secs(10));
+        // poll every 5 minutes for an updated JWKS
+        let mut poll_interval = tokio::time::interval(Duration::from_secs(60 * 5)); 
         let url = self.url.clone();
         let jwks_string = Arc::clone(&self.jwks);
 
+        // Spawn a new thread used to poll for the JWKS, ensuring we don't block execution of requests
         tokio::spawn( async move {
+            // Clone the string to safely pass into the loop
             let safe_jwks = Arc::clone(&jwks_string);
 
             loop {
                 {
-                    tracing::info!("Fetching JWKS");
+                    tracing::debug!("Fetching JWKS from {}", &url);
                     let jwks_response = JwksManager::fetch_jwks(&url).await.unwrap();
                     tracing::debug!("{}", jwks_response);
                     
@@ -54,7 +63,8 @@ impl JwksManager {
             }
         });
     }
-
+    
+    // Returns a 
     fn retrieve_keyset(&self) -> Result<JwkSet, BoxError>{
         let keyset = self.jwks.read().unwrap();
         let jwks: jwk::JwkSet = serde_json::from_str(&keyset).unwrap();
@@ -107,8 +117,12 @@ impl Plugin for JwksPlugin {
 
     fn router_service(
         &mut self,
-        service: BoxService<RouterRequest, RouterResponse, BoxError>,
-    ) -> BoxService<RouterRequest, RouterResponse, BoxError> {
+        service: BoxService<
+            RouterRequest, 
+            RouterResponse<BoxStream<'static, graphql::Response>>, 
+            BoxError
+        >,
+    ) -> BoxService<RouterRequest, RouterResponse<BoxStream<'static, graphql::Response>>, BoxError> {
         let token_header = self.token_header.clone();
         let token_prefix = self.token_prefix.clone();
         let jwks = self.jwks_manager.retrieve_keyset().unwrap();
@@ -121,16 +135,16 @@ impl Plugin for JwksPlugin {
                     context: Context,
                     msg: String,
                     status: StatusCode,
-                ) -> Result<ControlFlow<RouterResponse, RouterRequest>, BoxError> {
+                ) -> Result<ControlFlow<RouterResponse<BoxStream<'static, graphql::Response>>, RouterRequest>, BoxError> {
                     let res = RouterResponse::error_builder()
-                        .errors(vec![apollo_router_core::Error {
+                        .errors(vec![graphql::Error {
                             message: msg,
                             ..Default::default()
                         }])
                         .status_code(status)
                         .context(context)
                         .build()?;
-                    Ok(ControlFlow::Break(res))
+                    Ok(ControlFlow::Break(res.boxed()))
                 }
 
                 // The http_request is stored in a `RouterRequest` context.
@@ -150,7 +164,7 @@ impl Plugin for JwksPlugin {
                     Err(_not_a_string_error) => {
                         // Prepare an HTTP 400 response with a GraphQL error message
                         return failure_message(req.context,
-                                               "AUTHORIZATION' header is not convertible to a string".to_string(),
+                                               "Authorization' header is not convertible to a string".to_string(),
                             StatusCode::BAD_REQUEST,
                         );
                     }
@@ -188,17 +202,21 @@ impl Plugin for JwksPlugin {
 
                 let jwt_head: Header;
 
+                // Validate the JWT header; if not valid, return an error to the client
                 match header {
                     Ok(v)=>{jwt_head=v},
                     Err(_v)=>{
-                        return failure_message(req.context, "".to_string(), StatusCode::BAD_REQUEST)
+                        return failure_message(req.context, format!("JWT header is not correctly formatted"), StatusCode::BAD_REQUEST)
                     }
                 }
 
+                // Find the key ID (kid) value from the header
                 let kid = match jwt_head.kid {
                     Some(k)=>k,
                     None => return failure_message(req.context, "Missing valid kid value".to_string(), StatusCode::BAD_REQUEST)
                 };
+
+                // From the keyset, find the matching kid value and then attempt to decode
                 if let Some(j) = jwks.find(&kid) {
                     match j.algorithm {
                         AlgorithmParameters::RSA(ref rsa) => {
@@ -224,7 +242,7 @@ impl Plugin for JwksPlugin {
                                 }
                             }
                         }
-                        _ => unreachable!("this should be a RSA"),
+                        _ => unreachable!("this should be an RSA"),
                     }
                 } else {
                     return Err("No matching JWK found for the given kid".into());
@@ -232,14 +250,6 @@ impl Plugin for JwksPlugin {
             })
             .service(service)
             .boxed()
-    }
-
-    fn subgraph_service(
-        &mut self,
-        _name: &str,
-        service: BoxService<SubgraphRequest, SubgraphResponse, BoxError>,
-    ) -> BoxService<SubgraphRequest, SubgraphResponse, BoxError> {
-        service
     }
 }
 
@@ -250,7 +260,7 @@ mod tests {
 
     #[tokio::test]
     async fn plugin_registered() {
-        apollo_router_core::plugins()
+        apollo_router::plugin::plugins()
             .get("example.jwks")
             .expect("Plugin not found")
             .create_instance(&serde_json::json!({"jwks_url" : "https://dev-zzp5enui.us.auth0.com/.well-known/jwks.json"}))
