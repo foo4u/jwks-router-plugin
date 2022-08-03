@@ -11,7 +11,7 @@ This project is a sample plugin to showcase how to implement [JSON Web Key Set (
 
 ## Usage
 
-To get started with the sample plugin, you'll need to first configure the `router.yaml` file with your specific settings. There are three configuration options, and only one the `jwks_url` required:
+To get started with the sample plugin, you'll need to first configure the `router.yaml` file with your specific settings. There are three configuration options, and only `jwks_url` is required. The configuration looks like:
 
 ```yml
 plugins:
@@ -25,6 +25,8 @@ plugins:
 ```
 
 By default, the plugin looks for an `Authorization` header and the token prefixed by `Bearer`. The plugin supports an optional empty prefix if you prefer to pass without it.
+
+Additionally, the plugin will pass the defined header to the subgraph for validation at each level; this is by design, as it enables [a zero trust security model](https://en.wikipedia.org/wiki/Zero_trust_security_model).
 
 ## Test the plugin with Apollo Router
 
