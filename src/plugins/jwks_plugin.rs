@@ -1,86 +1,108 @@
-use std::collections::HashMap;
-use std::ops::ControlFlow;
-use std::time::Duration;
 use apollo_router::graphql;
 use apollo_router::layers::ServiceBuilderExt;
 use apollo_router::plugin::Plugin;
+use apollo_router::plugin::PluginInit;
 use apollo_router::register_plugin;
 use apollo_router::services::RouterRequest;
 use apollo_router::services::RouterResponse;
+use apollo_router::services::SubgraphRequest;
+use apollo_router::services::SubgraphResponse;
 use apollo_router::Context;
-use futures::stream::BoxStream;
-use jsonwebtoken::jwk::{JwkSet, AlgorithmParameters};
-use jsonwebtoken::{decode, decode_header, jwk, DecodingKey, Validation, Header, TokenData};
+use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
+use jsonwebtoken::{decode, decode_header, jwk, DecodingKey, Header, Validation};
+use reqwest::header::HeaderName;
+use reqwest::header::HeaderValue;
 use reqwest::StatusCode;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use std::collections::HashMap;
+use std::ops::ControlFlow;
 use std::sync::{Arc, RwLock};
+use std::time::Duration;
 use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
 
-struct JwksPlugin{
+// We are storing the configuration, but not using it. Hence the allow dead code.
+#[allow(dead_code)]
+struct JwksPlugin {
+    configuration: Conf,
+    // Which header to use; defaults to "Authorization"
     token_header: String,
+    // Which token prefix to use; defaults to "Bearer"
     token_prefix: String,
+    // Struct used to manage the JWKS for validation
     jwks_manager: JwksManager,
 }
 
-struct JwksManager{
+/*
+    JwksManager struct
+    jwks: stores the jwks keyset within an Arc (for cross channel communication) and RwLock (to avoid race conditions) as a string, which is parsed
+    by serde_json as needed
+    url: URL to fetch the JWKS from (expecting the .well-known/jwks.json path)
+*/
+struct JwksManager {
     jwks: Arc<RwLock<String>>,
     url: String,
 }
 
-/// JwksManager handles the JWKS for use with key validation and polling of an eternal JWKS JSON endpoint
+/// JwksManager handles the JWKS for use with key validation and polling of an external JWKS JSON endpoint
 impl JwksManager {
-    /// Returns a new implementation of the JwksManager with a valid JWKS 
-    async fn new(url: &str) -> Result<Self, BoxError>{       
-        let jwks_string = JwksManager::fetch_jwks(url).await.unwrap(); 
-        return Ok(Self{
+    /// Returns a new implementation of the JwksManager with a valid JWKS
+    async fn new(url: &str) -> Result<Self, BoxError> {
+        let jwks_string = JwksManager::fetch_jwks(url).await.unwrap();
+        return Ok(Self {
             jwks: Arc::new(RwLock::new(jwks_string)),
-            url: url.to_string()
-        })
+            url: url.to_string(),
+        });
     }
 
     fn poll(&self) {
-        // poll every 5 minutes for an updated JWKS
-        let mut poll_interval = tokio::time::interval(Duration::from_secs(60 * 5)); 
+        // poll every 5 minutes for an updated JWKS; adjust as needed
+        let mut poll_interval = tokio::time::interval(Duration::from_secs(60 * 5));
         let url = self.url.clone();
         let jwks_string = Arc::clone(&self.jwks);
 
         // Spawn a new thread used to poll for the JWKS, ensuring we don't block execution of requests
-        tokio::spawn( async move {
+        tokio::spawn(async move {
             // Clone the string to safely pass into the loop
             let safe_jwks = Arc::clone(&jwks_string);
 
+            // start the loop
             loop {
+                // move into a subroutine...
                 {
                     tracing::debug!("Fetching JWKS from {}", &url);
+
+                    // ... fetch the JWKS using the fetch_jwks function...
                     let jwks_response = JwksManager::fetch_jwks(&url).await.unwrap();
                     tracing::debug!("{}", jwks_response);
-                    
+
+                    // ... lock RwLock for the write to the Arc'ed safe_jwks string ...
                     let mut s = safe_jwks.write().unwrap();
+                    // ... write the response ...
                     *s = jwks_response;
                 }
-                poll_interval.tick().await; 
+                // ... and finally await the next tokio tick- set by the interval above.
+                poll_interval.tick().await;
             }
         });
     }
-    
-    // Returns a 
-    fn retrieve_keyset(&self) -> Result<JwkSet, BoxError>{
+
+    // Returns the keyset (aka the JWKS in a format used by the library)
+    fn retrieve_keyset(&self) -> Result<JwkSet, BoxError> {
         let keyset = self.jwks.read().unwrap();
         let jwks: jwk::JwkSet = serde_json::from_str(&keyset).unwrap();
         Ok(jwks)
     }
 
-    async fn fetch_jwks(url: &str) -> Result<String, BoxError>{
-        let resp = reqwest::get(url)
-            .await?
-            .text()
-            .await?;
-        
+    // simple function that returns back the JWKS as a string
+    async fn fetch_jwks(url: &str) -> Result<String, BoxError> {
+        let resp = reqwest::get(url).await?.text().await?;
+
         Ok(resp)
     }
 }
 
+// Configuration options for the actual plugin
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 struct Conf {
     jwks_url: String,
@@ -88,27 +110,34 @@ struct Conf {
     token_prefix: Option<String>,
 }
 
-// This is a bare-bones plugin that you can duplicate when creating your own.
 #[async_trait::async_trait]
 impl Plugin for JwksPlugin {
     type Config = Conf;
 
-    async fn new(configuration: Self::Config) -> Result<Self, BoxError> {
+    async fn new(init: PluginInit<Self::Config>) -> Result<Self, BoxError> {
+        let configuration = init.config;
+
+        // Setting sane defaults for the plugin
         let token_header = match configuration.token_header {
+            Some(ref x) => x.trim().to_string(),
             None => "Authorization".to_string(),
-            Some(x)=>x.trim().to_string(),
         };
-        
-        let token_prefix = match configuration.token_prefix{
-            None=>"Bearer ".to_string(), // make case insensitive
-            Some(x)=> x.trim().to_string() + " ",
+
+        let token_prefix = match configuration.token_prefix {
+            Some(ref x) => x.trim().to_string(),
+            None => "Bearer ".to_string(),
         };
-        
+
+        // Instantiate the JwksManager (which fetches the initial JWKS value)
         let jm = JwksManager::new(&configuration.jwks_url).await.unwrap();
+        // start the polling; comment out if you don't want to poll for changes
         jm.poll();
 
+        // Success! Log we are ready to go.
         tracing::info!("Successfully fetched JWT Key set. JWKS Plugin started");
+
         Ok(Self {
+            configuration,
             jwks_manager: jm,
             token_header,
             token_prefix,
@@ -116,13 +145,9 @@ impl Plugin for JwksPlugin {
     }
 
     fn router_service(
-        &mut self,
-        service: BoxService<
-            RouterRequest, 
-            RouterResponse<BoxStream<'static, graphql::Response>>, 
-            BoxError
-        >,
-    ) -> BoxService<RouterRequest, RouterResponse<BoxStream<'static, graphql::Response>>, BoxError> {
+        self: &JwksPlugin,
+        service: BoxService<RouterRequest, RouterResponse, BoxError>,
+    ) -> BoxService<RouterRequest, RouterResponse, BoxError> {
         let token_header = self.token_header.clone();
         let token_prefix = self.token_prefix.clone();
         let jwks = self.jwks_manager.retrieve_keyset().unwrap();
@@ -135,7 +160,7 @@ impl Plugin for JwksPlugin {
                     context: Context,
                     msg: String,
                     status: StatusCode,
-                ) -> Result<ControlFlow<RouterResponse<BoxStream<'static, graphql::Response>>, RouterRequest>, BoxError> {
+                ) -> Result<ControlFlow<RouterResponse, RouterRequest>, BoxError> {
                     let res = RouterResponse::error_builder()
                         .errors(vec![graphql::Error {
                             message: msg,
@@ -144,18 +169,22 @@ impl Plugin for JwksPlugin {
                         .status_code(status)
                         .context(context)
                         .build()?;
-                    Ok(ControlFlow::Break(res.boxed()))
+                    Ok(ControlFlow::Break(res))
                 }
 
                 // The http_request is stored in a `RouterRequest` context.
-                // We are going to check the headers for the presence of the header we're looking for
-                // We are implementing: https://www.rfc-editor.org/rfc/rfc6750
-                // so check for our AUTHORIZATION header.
+                // We are going to check the headers for the presence of the header we're looking for as set by the configuration or default value
                 let jwt_value_result = match req.originating_request.headers().get(&token_header) {
                     Some(value) => value.to_str(),
                     None =>
-                        // Prepare an HTTP 401 response with a GraphQL error message
-                        return failure_message(req.context, format!("Missing '{}' header", token_header), StatusCode::UNAUTHORIZED),
+                    // Prepare an HTTP 401 response with a GraphQL error message
+                    {
+                        return failure_message(
+                            req.context,
+                            format!("Missing '{}' header", token_header),
+                            StatusCode::UNAUTHORIZED,
+                        )
+                    }
                 };
 
                 // If we find the header, but can't convert it to a string, let the client know
@@ -163,8 +192,9 @@ impl Plugin for JwksPlugin {
                     Ok(value) => value,
                     Err(_not_a_string_error) => {
                         // Prepare an HTTP 400 response with a GraphQL error message
-                        return failure_message(req.context,
-                                               "Authorization' header is not convertible to a string".to_string(),
+                        return failure_message(
+                            req.context,
+                            "Authorization' header is not convertible to a string".to_string(),
                             StatusCode::BAD_REQUEST,
                         );
                     }
@@ -176,77 +206,141 @@ impl Plugin for JwksPlugin {
                 // Make sure the format of our message matches our expectations
                 // Technically, the spec is case sensitive, but let's accept
                 // case variations
-                if !jwt_value.to_uppercase().as_str().starts_with(&token_prefix.to_uppercase()) {
+                // this also adds the required space at the end for the token prefix
+                // adding a new variable is used for splitting, however the initial prefix should be preserved for skipping empty string
+                // prefixes
+                if !jwt_value
+                    .to_uppercase()
+                    .as_str()
+                    .starts_with(&format!("{} ", token_prefix).to_uppercase())
+                    && &token_prefix.chars().count() > &0
+                {
                     // Prepare an HTTP 400 response with a GraphQL error message
-                    return failure_message(req.context,
-                                           format!("'{jwt_value_untrimmed}' is not correctly formatted"),
-                        StatusCode::BAD_REQUEST,
+                    return failure_message(
+                        req.context,
+                        format!("Header is not correctly formatted"),
+                        StatusCode::UNAUTHORIZED,
                     );
                 }
 
-                // We know we have a "space", since we checked above. Split our string
+                // We know we have a "space" if the charcount is > 0, since we checked above. Split our string other
                 // in (at most 2) sections.
                 let jwt_parts: Vec<&str> = jwt_value.splitn(2, ' ').collect();
-                if jwt_parts.len() != 2 {
+
+                if jwt_parts.len() != 2 && &token_prefix.chars().count() > &0 {
                     // Prepare an HTTP 400 response with a GraphQL error message
-                    return failure_message(req.context,
-                                           format!("'{jwt_value}' is not correctly formatted"),
-                        StatusCode::BAD_REQUEST,
+                    return failure_message(
+                        req.context,
+                        format!("Header is not correctly formatted2"),
+                        StatusCode::UNAUTHORIZED,
                     );
                 }
 
                 // Trim off any trailing white space (not valid in BASE64 encoding)
-                let jwt = jwt_parts[1].trim_end();
+                let jwt = jwt_parts[if &token_prefix.chars().count() > &0 {
+                    1
+                } else {
+                    0
+                }]
+                .trim_end();
 
+                // decode the header (first part of the JWT)
                 let header = decode_header(jwt);
 
                 let jwt_head: Header;
 
                 // Validate the JWT header; if not valid, return an error to the client
                 match header {
-                    Ok(v)=>{jwt_head=v},
-                    Err(_v)=>{
-                        return failure_message(req.context, format!("JWT header is not correctly formatted"), StatusCode::BAD_REQUEST)
+                    Ok(v) => jwt_head = v,
+                    Err(_v) => {
+                        return failure_message(
+                            req.context,
+                            format!("JWT header section is not correctly formatted"),
+                            StatusCode::BAD_REQUEST,
+                        )
                     }
                 }
 
-                // Find the key ID (kid) value from the header
+                // Find the key ID (kid) value from the header; this may not exist for symmetrically signed JWTs, but
+                // that is out of scope for this plugin; if you need symmetrically signed plugins, see: https://github.com/apollographql/router/tree/main/examples/jwt-auth
                 let kid = match jwt_head.kid {
-                    Some(k)=>k,
-                    None => return failure_message(req.context, "Missing valid kid value".to_string(), StatusCode::BAD_REQUEST)
+                    Some(k) => k,
+                    None => {
+                        return failure_message(
+                            req.context,
+                            "Missing valid kid value".to_string(),
+                            StatusCode::BAD_REQUEST,
+                        )
+                    }
                 };
 
                 // From the keyset, find the matching kid value and then attempt to decode
-                if let Some(j) = jwks.find(&kid) {
-                    match j.algorithm {
+                if let Some(jwk) = jwks.find(&kid) {
+                    match jwk.algorithm {
                         AlgorithmParameters::RSA(ref rsa) => {
-                            let decoding_key = DecodingKey::from_rsa_components(&rsa.n, &rsa.e).unwrap();
-                            let mut validation = Validation::new(j.common.algorithm.unwrap());
-                            validation.validate_exp = false;
-                            let token_result = decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation);
-                            let decoded_token: TokenData<HashMap<String, serde_json::Value>>;
+                            // set up the decoding key for the JWT from the JWK
+                            let decoding_key =
+                                DecodingKey::from_rsa_components(&rsa.n, &rsa.e).unwrap();
+                            let validation = Validation::new(jwk.common.algorithm.unwrap());
 
-                            match token_result {
-                                Ok(v)=>{decoded_token = v},
-                                Err(_v)=>{
-                                    return failure_message(req.context, format!("'{jwt_value}' is not correctly formatted"), StatusCode::BAD_REQUEST);
-                                }
+                            // attempt to decode
+                            let token_result = decode::<HashMap<String, serde_json::Value>>(
+                                jwt,
+                                &decoding_key,
+                                &validation,
+                            );
+
+                            // check the result; if an error, throw an error to the requestor, otherwise set the decoded_token to the value
+                            if let Err(_e) = token_result {
+                                return failure_message(
+                                    req.context,
+                                    format!("Invalid JWT"),
+                                    StatusCode::UNAUTHORIZED,
+                                );
                             }
-                            match req.context.insert("JWTClaims", decoded_token.claims) {
-                                Ok(_v) => Ok(ControlFlow::Continue(req)),
-                                Err(err) => {
-                                    return failure_message(req.context,
-                                                            format!("couldn't store JWT claims in context: {}", err),
-                                        StatusCode::INTERNAL_SERVER_ERROR,
-                                    );
-                                }
-                            }
+
+                            // push the JWT Header into the context to pass down to subgraphs
+                            if let Err(e) = req.context.insert("JWTHeader", jwt_value.to_owned()) {
+                                return failure_message(
+                                    req.context,
+                                    format!("couldn't store JWT claims in context: {}", e),
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                );
+                            };
+                            Ok(ControlFlow::Continue(req))
                         }
                         _ => unreachable!("this should be an RSA"),
                     }
                 } else {
-                    return Err("No matching JWK found for the given kid".into());
+                    return failure_message(
+                        req.context,
+                        "Invalid JWT".to_string(),
+                        StatusCode::UNAUTHORIZED,
+                    );
                 }
+            })
+            .service(service)
+            .boxed()
+    }
+
+    // used to forward the header from the context set above
+    fn subgraph_service(
+        &self,
+        _name: &str,
+        service: BoxService<SubgraphRequest, SubgraphResponse, BoxError>,
+    ) -> BoxService<SubgraphRequest, SubgraphResponse, BoxError> {
+        let token_header = self.token_header.clone();
+
+        ServiceBuilder::new()
+            .map_request(move |mut req: SubgraphRequest| {
+                if let Ok(Some(data)) = req.context.get::<_, String>("JWTHeader") {
+                    let th = token_header.clone().to_string();
+                    req.subgraph_request.headers_mut().insert(
+                        HeaderName::from_bytes(th.as_bytes()).unwrap(),
+                        HeaderValue::from_str(&data).unwrap(),
+                    );
+                }
+                req
             })
             .service(service)
             .boxed()
@@ -263,7 +357,7 @@ mod tests {
         apollo_router::plugin::plugins()
             .get("example.jwks")
             .expect("Plugin not found")
-            .create_instance(&serde_json::json!({"jwks_url" : "https://dev-zzp5enui.us.auth0.com/.well-known/jwks.json"}))
+            .create_instance(&serde_json::json!({"jwks_url" : "https://dev-zzp5enui.us.auth0.com/.well-known/jwks.json"}), Default::default())
             .await
             .unwrap();
     }
