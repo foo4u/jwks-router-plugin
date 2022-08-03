@@ -25,7 +25,8 @@ directive @join__graph(name: String!, url: String!) on ENUM_VALUE
 scalar join__FieldSet
 
 enum join__Graph {
-  ACCOUNTS @join__graph(name: "accounts", url: "http://localhost:3123")
+  ACCOUNTS
+    @join__graph(name: "accounts", url: "https://accounts.demo.starstuff.dev")
   INVENTORY
     @join__graph(name: "inventory", url: "https://inventory.demo.starstuff.dev")
   PRODUCTS
