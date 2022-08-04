@@ -33,12 +33,10 @@ struct JwksPlugin {
     jwks_manager: JwksManager,
 }
 
-/*
-    JwksManager struct
-    jwks: stores the jwks keyset within an Arc (for cross channel communication) and RwLock (to avoid race conditions) as a string, which is parsed
-    by serde_json as needed
-    url: URL to fetch the JWKS from (expecting the .well-known/jwks.json path)
-*/
+// JwksManager struct
+//     jwks: stores the jwks keyset within an Arc (for cross channel communication) and RwLock (to avoid race conditions) as a string, which is parsed
+//     by serde_json as needed
+//     url: URL to fetch the JWKS from (expecting the .well-known/jwks.json path)
 struct JwksManager {
     jwks: Arc<RwLock<String>>,
     url: String,
@@ -48,11 +46,11 @@ struct JwksManager {
 impl JwksManager {
     /// Returns a new implementation of the JwksManager with a valid JWKS
     async fn new(url: &str) -> Result<Self, BoxError> {
-        let jwks_string = JwksManager::fetch_jwks(url).await.unwrap();
-        return Ok(Self {
+        let jwks_string = JwksManager::fetch_jwks(url).await?;
+        Ok(Self {
             jwks: Arc::new(RwLock::new(jwks_string)),
             url: url.to_string(),
-        });
+        })
     }
 
     fn poll(&self) {
@@ -73,13 +71,27 @@ impl JwksManager {
                     tracing::debug!("Fetching JWKS from {}", &url);
 
                     // ... fetch the JWKS using the fetch_jwks function...
-                    let jwks_response = JwksManager::fetch_jwks(&url).await.unwrap();
-                    tracing::debug!("{}", jwks_response);
+                    match JwksManager::fetch_jwks(&url).await {
+                        Ok(jwks_response) => {
+                            tracing::debug!("{}", jwks_response);
 
-                    // ... lock RwLock for the write to the Arc'ed safe_jwks string ...
-                    let mut s = safe_jwks.write().unwrap();
-                    // ... write the response ...
-                    *s = jwks_response;
+                            // ... lock RwLock for the write to the Arc'ed safe_jwks string ...
+                            match safe_jwks.write() {
+                                Ok(mut s) => {
+                                    // ... write the response ...
+                                    *s = jwks_response;
+                                }
+                                Err(e) => tracing::error!(
+                                    "Error obtaining lock; skipping this poll: {}",
+                                    e
+                                ),
+                            }
+                        }
+                        Err(e) => {
+                            // capture any errors and log out the error to avoid crashing the plugin
+                            tracing::error!("Error received when fetching JWKS: {}", e)
+                        }
+                    }
                 }
                 // ... and finally await the next tokio tick- set by the interval above.
                 poll_interval.tick().await;
@@ -89,9 +101,13 @@ impl JwksManager {
 
     // Returns the keyset (aka the JWKS in a format used by the library)
     fn retrieve_keyset(&self) -> Result<JwkSet, BoxError> {
-        let keyset = self.jwks.read().unwrap();
-        let jwks: jwk::JwkSet = serde_json::from_str(&keyset).unwrap();
-        Ok(jwks)
+        match self.jwks.read() {
+            Ok(keyset) => {
+                let jwks: jwk::JwkSet = serde_json::from_str(&keyset)?;
+                Ok(jwks)
+            }
+            Err(_e) => Err(BoxError::from("Error obtaining read on keyset".to_string())),
+        }
     }
 
     // simple function that returns back the JWKS as a string
@@ -213,12 +229,12 @@ impl Plugin for JwksPlugin {
                     .to_uppercase()
                     .as_str()
                     .starts_with(&format!("{} ", token_prefix).to_uppercase())
-                    && &token_prefix.chars().count() > &0
+                    && token_prefix.chars().count() > 0
                 {
                     // Prepare an HTTP 400 response with a GraphQL error message
                     return failure_message(
                         req.context,
-                        format!("Header is not correctly formatted"),
+                        "Header is not correctly formatted".to_string(),
                         StatusCode::UNAUTHORIZED,
                     );
                 }
@@ -227,17 +243,17 @@ impl Plugin for JwksPlugin {
                 // in (at most 2) sections.
                 let jwt_parts: Vec<&str> = jwt_value.splitn(2, ' ').collect();
 
-                if jwt_parts.len() != 2 && &token_prefix.chars().count() > &0 {
+                if jwt_parts.len() != 2 && token_prefix.chars().count() > 0 {
                     // Prepare an HTTP 400 response with a GraphQL error message
                     return failure_message(
                         req.context,
-                        format!("Header is not correctly formatted2"),
+                        "Header is not correctly formatted2".to_string(),
                         StatusCode::UNAUTHORIZED,
                     );
                 }
 
                 // Trim off any trailing white space (not valid in BASE64 encoding)
-                let jwt = jwt_parts[if &token_prefix.chars().count() > &0 {
+                let jwt = jwt_parts[if token_prefix.chars().count() > 0 {
                     1
                 } else {
                     0
@@ -255,7 +271,7 @@ impl Plugin for JwksPlugin {
                     Err(_v) => {
                         return failure_message(
                             req.context,
-                            format!("JWT header section is not correctly formatted"),
+                            "JWT header section is not correctly formatted".to_string(),
                             StatusCode::BAD_REQUEST,
                         )
                     }
@@ -294,7 +310,7 @@ impl Plugin for JwksPlugin {
                             if let Err(_e) = token_result {
                                 return failure_message(
                                     req.context,
-                                    format!("Invalid JWT"),
+                                    "Invalid JWT".to_string(),
                                     StatusCode::UNAUTHORIZED,
                                 );
                             }
@@ -303,20 +319,24 @@ impl Plugin for JwksPlugin {
                             if let Err(e) = req.context.insert("JWTHeader", jwt_value.to_owned()) {
                                 return failure_message(
                                     req.context,
-                                    format!("couldn't store JWT claims in context: {}", e),
+                                    format!("couldn't store JWT header in context: {}", e),
                                     StatusCode::INTERNAL_SERVER_ERROR,
                                 );
                             };
                             Ok(ControlFlow::Continue(req))
                         }
-                        _ => unreachable!("this should be an RSA"),
+                        _ => failure_message(
+                            req.context,
+                            "Unable to load RSA keys".to_string(),
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                        ),
                     }
                 } else {
-                    return failure_message(
+                    failure_message(
                         req.context,
                         "Invalid JWT".to_string(),
                         StatusCode::UNAUTHORIZED,
-                    );
+                    )
                 }
             })
             .service(service)
@@ -334,7 +354,7 @@ impl Plugin for JwksPlugin {
         ServiceBuilder::new()
             .map_request(move |mut req: SubgraphRequest| {
                 if let Ok(Some(data)) = req.context.get::<_, String>("JWTHeader") {
-                    let th = token_header.clone().to_string();
+                    let th = token_header.to_string();
                     req.subgraph_request.headers_mut().insert(
                         HeaderName::from_bytes(th.as_bytes()).unwrap(),
                         HeaderValue::from_str(&data).unwrap(),
