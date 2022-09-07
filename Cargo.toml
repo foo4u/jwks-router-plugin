@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.55"
-apollo-router = { git="https://github.com/apollographql/router.git", tag="v0.14.0" }
+apollo-router = { git="https://github.com/apollographql/router.git", tag="v1.0.0-alpha.2" }
 async-trait = "0.1.52"
 futures = "0.3.21"
 jsonwebtoken = "8"
