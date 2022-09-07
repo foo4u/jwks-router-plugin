@@ -164,7 +164,10 @@ impl Plugin for JwksPlugin {
     ) -> BoxService<supergraph::Request, supergraph::Response, BoxError> {
         let token_header = self.token_header.clone();
         let token_prefix = self.token_prefix.clone();
-        let jwks = self.jwks_manager.retrieve_keyset().unwrap();
+        let jwks = self
+            .jwks_manager
+            .retrieve_keyset()
+            .expect("Error retrieving JWKS from the JWKSManager");
 
         ServiceBuilder::new()
             .checkpoint(move |req: supergraph::Request| {
