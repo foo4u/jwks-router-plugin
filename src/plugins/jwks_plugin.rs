@@ -3,10 +3,8 @@ use apollo_router::layers::ServiceBuilderExt;
 use apollo_router::plugin::Plugin;
 use apollo_router::plugin::PluginInit;
 use apollo_router::register_plugin;
-use apollo_router::services::RouterRequest;
-use apollo_router::services::RouterResponse;
-use apollo_router::services::SubgraphRequest;
-use apollo_router::services::SubgraphResponse;
+use apollo_router::services::subgraph;
+use apollo_router::services::supergraph;
 use apollo_router::Context;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::{decode, decode_header, jwk, DecodingKey, Header, Validation};
@@ -160,28 +158,26 @@ impl Plugin for JwksPlugin {
         })
     }
 
-    fn router_service(
+    fn supergraph_service(
         self: &JwksPlugin,
-        service: BoxService<RouterRequest, RouterResponse, BoxError>,
-    ) -> BoxService<RouterRequest, RouterResponse, BoxError> {
+        service: BoxService<supergraph::Request, supergraph::Response, BoxError>,
+    ) -> BoxService<supergraph::Request, supergraph::Response, BoxError> {
         let token_header = self.token_header.clone();
         let token_prefix = self.token_prefix.clone();
         let jwks = self.jwks_manager.retrieve_keyset().unwrap();
 
         ServiceBuilder::new()
-            .checkpoint(move |req: RouterRequest| {
+            .checkpoint(move |req: supergraph::Request| {
                 // We are going to do a lot of similar checking so let's define a local function
                 // to help reduce repetition
                 fn failure_message(
                     context: Context,
                     msg: String,
                     status: StatusCode,
-                ) -> Result<ControlFlow<RouterResponse, RouterRequest>, BoxError> {
-                    let res = RouterResponse::error_builder()
-                        .errors(vec![graphql::Error {
-                            message: msg,
-                            ..Default::default()
-                        }])
+                ) -> Result<ControlFlow<supergraph::Response, supergraph::Request>, BoxError>
+                {
+                    let res = supergraph::Response::error_builder()
+                        .error(graphql::Error::builder().message(msg).build())
                         .status_code(status)
                         .context(context)
                         .build()?;
@@ -247,7 +243,7 @@ impl Plugin for JwksPlugin {
                     // Prepare an HTTP 400 response with a GraphQL error message
                     return failure_message(
                         req.context,
-                        "Header is not correctly formatted2".to_string(),
+                        "Header is not correctly formatted".to_string(),
                         StatusCode::UNAUTHORIZED,
                     );
                 }
@@ -347,12 +343,12 @@ impl Plugin for JwksPlugin {
     fn subgraph_service(
         &self,
         _name: &str,
-        service: BoxService<SubgraphRequest, SubgraphResponse, BoxError>,
-    ) -> BoxService<SubgraphRequest, SubgraphResponse, BoxError> {
+        service: BoxService<subgraph::Request, subgraph::Response, BoxError>,
+    ) -> BoxService<subgraph::Request, subgraph::Response, BoxError> {
         let token_header = self.token_header.clone();
 
         ServiceBuilder::new()
-            .map_request(move |mut req: SubgraphRequest| {
+            .map_request(move |mut req: subgraph::Request| {
                 if let Ok(Some(data)) = req.context.get::<_, String>("JWTHeader") {
                     let th = token_header.to_string();
                     req.subgraph_request.headers_mut().insert(
@@ -371,13 +367,19 @@ register_plugin!("example", "jwks", JwksPlugin);
 
 #[cfg(test)]
 mod tests {
-
     #[tokio::test]
     async fn plugin_registered() {
-        apollo_router::plugin::plugins()
-            .get("example.jwks")
-            .expect("Plugin not found")
-            .create_instance(&serde_json::json!({"jwks_url" : "https://dev-zzp5enui.us.auth0.com/.well-known/jwks.json"}), Default::default())
+        let config = serde_json::json!({
+            "plugins": {
+                "example.jwks": {
+                    "jwks_url": "https://dev-zzp5enui.us.auth0.com/.well-known/jwks.json" ,
+                }
+            }
+        });
+        apollo_router::TestHarness::builder()
+            .configuration_json(config)
+            .unwrap()
+            .build()
             .await
             .unwrap();
     }
