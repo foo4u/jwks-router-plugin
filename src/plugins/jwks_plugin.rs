@@ -189,7 +189,7 @@ impl Plugin for JwksPlugin {
 
                 // The http_request is stored in a `RouterRequest` context.
                 // We are going to check the headers for the presence of the header we're looking for as set by the configuration or default value
-                let jwt_value_result = match req.originating_request.headers().get(&token_header) {
+                let jwt_value_result = match req.supergraph_request.headers().get(&token_header) {
                     Some(value) => value.to_str(),
                     None =>
                     // Prepare an HTTP 401 response with a GraphQL error message

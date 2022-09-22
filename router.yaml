@@ -1,5 +1,10 @@
-server: 
+supergraph: 
   listen: 0.0.0.0:4000
+  introspection: true
+homepage:
+  enabled: false
+sandbox:
+  enabled: true
 plugins:
   example.jwks:
     jwks_url: "https://dev-zzp5enui.us.auth0.com/.well-known/jwks.json"
