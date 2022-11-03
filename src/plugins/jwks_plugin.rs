@@ -74,16 +74,11 @@ impl JwksManager {
                             tracing::debug!("{}", jwks_response);
 
                             // ... lock RwLock for the write to the Arc'ed safe_jwks string ...
-                            match safe_jwks.write() {
-                                Ok(mut s) => {
-                                    // ... write the response ...
-                                    *s = jwks_response;
-                                }
-                                Err(e) => tracing::error!(
-                                    "Error obtaining lock; skipping this poll: {}",
-                                    e
-                                ),
-                            }
+                            let mut s = safe_jwks.write().unwrap();
+                            *s = jwks_response;
+                            // if line above doesn't work try this:
+                            // s.clear();
+                            // s.push_str(&jwks_response);
                         }
                         Err(e) => {
                             // capture any errors and log out the error to avoid crashing the plugin
@@ -99,13 +94,9 @@ impl JwksManager {
 
     // Returns the keyset (aka the JWKS in a format used by the library)
     fn retrieve_keyset(&self) -> Result<JwkSet, BoxError> {
-        match self.jwks.read() {
-            Ok(keyset) => {
-                let jwks: jwk::JwkSet = serde_json::from_str(&keyset)?;
-                Ok(jwks)
-            }
-            Err(_e) => Err(BoxError::from("Error obtaining read on keyset".to_string())),
-        }
+        let keyset = self.jwks.read().unwrap();
+        let jwks: jwk::JwkSet = serde_json::from_str(&keyset)?;
+        Ok(jwks)
     }
 
     // simple function that returns back the JWKS as a string
