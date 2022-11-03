@@ -17,6 +17,9 @@ use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
+use tokio::sync::oneshot;
+use tokio::sync::oneshot::error::TryRecvError;
+use tokio::sync::oneshot::Sender;
 use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
 
 // We are storing the configuration, but not using it. Hence the allow dead code.
@@ -38,6 +41,9 @@ struct JwksPlugin {
 struct JwksManager {
     jwks: Arc<RwLock<String>>,
     url: String,
+    // `Option` because in theory one can call `JwksManager::new()` but
+    // not manager.poll() later, so `jwks` updater task may not be running at all.
+    shutdown_hook: Option<Sender<bool>>,
 }
 
 /// JwksManager handles the JWKS for use with key validation and polling of an external JWKS JSON endpoint
@@ -48,22 +54,38 @@ impl JwksManager {
         Ok(Self {
             jwks: Arc::new(RwLock::new(jwks_string)),
             url: url.to_string(),
+            shutdown_hook: None,
         })
     }
 
-    fn poll(&self) {
+    fn poll(&mut self) {
         // poll every 5 minutes for an updated JWKS; adjust as needed
         let mut poll_interval = tokio::time::interval(Duration::from_secs(60 * 5));
         let url = self.url.clone();
         let jwks_string = Arc::clone(&self.jwks);
 
-        // Spawn a new thread used to poll for the JWKS, ensuring we don't block execution of requests
+        // This channel will only be used once to signal the shutdown.
+        let (tx, mut rx) = oneshot::channel();
+        self.shutdown_hook = Some(tx);
+        // Spawn a new task used to poll for the JWKS, ensuring we don't block execution of requests
         tokio::spawn(async move {
             // Clone the string to safely pass into the loop
             let safe_jwks = Arc::clone(&jwks_string);
 
             // start the loop
             loop {
+                let should_exit = match rx.try_recv() {
+                    // got a shutdown message from the `drop`
+                    Ok(_) => true,
+                    // haven't got a message, but sender doesn't exist anymore
+                    Err(TryRecvError::Closed) => true,
+                    // no shutdown message yet
+                    Err(TryRecvError::Empty) => false,
+                };
+                if should_exit {
+                    break;
+                }
+
                 // move into a subroutine...
                 {
                     tracing::debug!("Fetching JWKS from {}", &url);
@@ -107,6 +129,18 @@ impl JwksManager {
     }
 }
 
+impl Drop for JwksManager {
+    fn drop(&mut self) {
+        // `oneshot::Sender::send` consumes `self` so we use `take` to get
+        // an owned `hook` instead of a reference to it.
+        if let Some(hook) = self.shutdown_hook.take() {
+            // we send a message to let manager's task know that it should
+            // shutdown.
+            let _ = hook.send(true);
+        }
+    }
+}
+
 // Configuration options for the actual plugin
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 struct Conf {
@@ -134,7 +168,7 @@ impl Plugin for JwksPlugin {
         };
 
         // Instantiate the JwksManager (which fetches the initial JWKS value)
-        let jm = JwksManager::new(&configuration.jwks_url).await.unwrap();
+        let mut jm = JwksManager::new(&configuration.jwks_url).await.unwrap();
         // start the polling; comment out if you don't want to poll for changes
         jm.poll();
 
