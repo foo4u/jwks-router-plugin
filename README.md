@@ -24,9 +24,40 @@ plugins:
     token_prefix: Bearer
 ```
 
-By default, the plugin looks for an `Authorization` header and the token prefixed by `Bearer`. The plugin supports an optional empty prefix if you prefer to pass without it.
+## Usage from Your Router Repository
 
-Additionally, the plugin will pass the defined header to the subgraph for validation at each level; this is by design, as it enables [a zero trust security model](https://en.wikipedia.org/wiki/Zero_trust_security_model).
+To this plugin from your own router repository, you'll need to include this
+`jwks-router-plugin` as a dependency in your `Cargo.toml` file. Since this plugin
+is not published to [crates.io](https://crates.io/), you can accomplish this using
+a GitHub reference. For example:
+
+```toml
+[dependencies]
+jwks-router-plugin = { git = "https://github.com/apollosolutions/jwks-router-plugin", branch="main" }
+```
+
+Then you'll need to register this plugin, which, can be done simply by adding it to your
+`plugins/mod.rs` file. Suppose your company, Acme, wanted to use this plugin as `achme.jwks`,
+rather than `example.jwks`, you'd simply add:
+
+```rust
+use apollo_router::register_plugin;
+pub use jwks_router_plugin::plugins::jwks_plugin::JwksPlugin;
+
+register_plugin!("acme", "jwks", JwksPlugin);
+```
+
+The prefix used when calling `register_plugin` is used below when configuring the plugin.
+Now you can configure your `router.yaml` file with your JWKS settings. 
+The configuration looks like:
+
+```yml
+plugins:
+  acme.jwks:
+    jwks_url: "JWKS_URL_HERE"
+    token_header: "Authorization"
+    token_prefix: Bearer
+```
 
 ## Test the plugin with Apollo Router
 
