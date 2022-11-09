@@ -38,7 +38,7 @@ pub struct JwksPlugin {
 //     jwks: stores the jwks keyset within an Arc (for cross channel communication) and RwLock (to avoid race conditions) as a string, which is parsed
 //     by serde_json as needed
 //     url: URL to fetch the JWKS from (expecting the .well-known/jwks.json path)
-pub struct JwksManager {
+struct JwksManager {
     jwks: Arc<RwLock<String>>,
     url: String,
     // `Option` because in theory one can call `JwksManager::new()` but
