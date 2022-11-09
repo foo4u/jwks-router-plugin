@@ -164,7 +164,7 @@ impl Plugin for JwksPlugin {
 
         let token_prefix = match configuration.token_prefix {
             Some(ref x) => x.trim().to_string(),
-            None => "Bearer ".to_string(),
+            None => "Bearer".to_string(),
         };
 
         // Instantiate the JwksManager (which fetches the initial JWKS value)
