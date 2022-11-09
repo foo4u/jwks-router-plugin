@@ -1,2 +1,2 @@
-mod jwks_plugin;
+pub mod jwks_plugin;
 

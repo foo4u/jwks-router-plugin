@@ -1,6 +1,6 @@
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [package]
-name = "router-extension-template"
+name = "jwks-router-plugin"
 version = "0.1.0"
 edition = "2021"
 license = "Elastic-2.0"
@@ -8,6 +8,9 @@ license = "Elastic-2.0"
 [[bin]]
 name = "router"
 path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1.0.55"
