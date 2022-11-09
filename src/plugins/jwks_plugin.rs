@@ -24,7 +24,7 @@ use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
 
 // We are storing the configuration, but not using it. Hence the allow dead code.
 #[allow(dead_code)]
-struct JwksPlugin {
+pub struct JwksPlugin {
     configuration: Conf,
     // Which header to use; defaults to "Authorization"
     token_header: String,
@@ -38,7 +38,7 @@ struct JwksPlugin {
 //     jwks: stores the jwks keyset within an Arc (for cross channel communication) and RwLock (to avoid race conditions) as a string, which is parsed
 //     by serde_json as needed
 //     url: URL to fetch the JWKS from (expecting the .well-known/jwks.json path)
-struct JwksManager {
+pub struct JwksManager {
     jwks: Arc<RwLock<String>>,
     url: String,
     // `Option` because in theory one can call `JwksManager::new()` but
@@ -143,7 +143,7 @@ impl Drop for JwksManager {
 
 // Configuration options for the actual plugin
 #[derive(Debug, Default, Deserialize, JsonSchema)]
-struct Conf {
+pub struct Conf {
     jwks_url: String,
     token_header: Option<String>,
     token_prefix: Option<String>,
