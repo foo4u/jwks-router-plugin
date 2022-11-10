@@ -6,8 +6,8 @@ use apollo_router::register_plugin;
 use apollo_router::services::subgraph;
 use apollo_router::services::supergraph;
 use apollo_router::Context;
-use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
-use jsonwebtoken::{decode, decode_header, jwk, DecodingKey, Header, Validation};
+use jsonwebtoken::jwk::{AlgorithmParameters};
+use jsonwebtoken::{decode, decode_header, DecodingKey, Header, Validation};
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use reqwest::StatusCode;
@@ -15,131 +15,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::ops::ControlFlow;
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
-use tokio::sync::oneshot;
-use tokio::sync::oneshot::error::TryRecvError;
-use tokio::sync::oneshot::Sender;
 use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
-
-// We are storing the configuration, but not using it. Hence the allow dead code.
-#[allow(dead_code)]
-pub struct JwksPlugin {
-    configuration: Conf,
-    // Which header to use; defaults to "Authorization"
-    token_header: String,
-    // Which token prefix to use; defaults to "Bearer"
-    token_prefix: String,
-    // Struct used to manage the JWKS for validation
-    jwks_manager: JwksManager,
-}
-
-// JwksManager struct
-//     jwks: stores the jwks keyset within an Arc (for cross channel communication) and RwLock (to avoid race conditions) as a string, which is parsed
-//     by serde_json as needed
-//     url: URL to fetch the JWKS from (expecting the .well-known/jwks.json path)
-struct JwksManager {
-    jwks: Arc<RwLock<String>>,
-    url: String,
-    // `Option` because in theory one can call `JwksManager::new()` but
-    // not manager.poll() later, so `jwks` updater task may not be running at all.
-    shutdown_hook: Option<Sender<bool>>,
-}
-
-/// JwksManager handles the JWKS for use with key validation and polling of an external JWKS JSON endpoint
-impl JwksManager {
-    /// Returns a new implementation of the JwksManager with a valid JWKS
-    async fn new(url: &str) -> Result<Self, BoxError> {
-        let jwks_string = JwksManager::fetch_jwks(url).await?;
-        Ok(Self {
-            jwks: Arc::new(RwLock::new(jwks_string)),
-            url: url.to_string(),
-            shutdown_hook: None,
-        })
-    }
-
-    fn poll(&mut self) {
-        // poll every 5 minutes for an updated JWKS; adjust as needed
-        let mut poll_interval = tokio::time::interval(Duration::from_secs(60 * 5));
-        let url = self.url.clone();
-        let jwks_string = Arc::clone(&self.jwks);
-
-        // This channel will only be used once to signal the shutdown.
-        let (tx, mut rx) = oneshot::channel();
-        self.shutdown_hook = Some(tx);
-        // Spawn a new task used to poll for the JWKS, ensuring we don't block execution of requests
-        tokio::spawn(async move {
-            // Clone the string to safely pass into the loop
-            let safe_jwks = Arc::clone(&jwks_string);
-
-            // start the loop
-            loop {
-                let should_exit = match rx.try_recv() {
-                    // got a shutdown message from the `drop`
-                    Ok(_) => true,
-                    // haven't got a message, but sender doesn't exist anymore
-                    Err(TryRecvError::Closed) => true,
-                    // no shutdown message yet
-                    Err(TryRecvError::Empty) => false,
-                };
-                if should_exit {
-                    break;
-                }
-
-                // move into a subroutine...
-                {
-                    tracing::debug!("Fetching JWKS from {}", &url);
-
-                    // ... fetch the JWKS using the fetch_jwks function...
-                    match JwksManager::fetch_jwks(&url).await {
-                        Ok(jwks_response) => {
-                            tracing::debug!("{}", jwks_response);
-
-                            // ... lock RwLock for the write to the Arc'ed safe_jwks string ...
-                            let mut s = safe_jwks.write().unwrap();
-                            *s = jwks_response;
-                            // if line above doesn't work try this:
-                            // s.clear();
-                            // s.push_str(&jwks_response);
-                        }
-                        Err(e) => {
-                            // capture any errors and log out the error to avoid crashing the plugin
-                            tracing::error!("Error received when fetching JWKS: {}", e)
-                        }
-                    }
-                }
-                // ... and finally await the next tokio tick- set by the interval above.
-                poll_interval.tick().await;
-            }
-        });
-    }
-
-    // Returns the keyset (aka the JWKS in a format used by the library)
-    fn retrieve_keyset(&self) -> Result<JwkSet, BoxError> {
-        let keyset = self.jwks.read().unwrap();
-        let jwks: jwk::JwkSet = serde_json::from_str(&keyset)?;
-        Ok(jwks)
-    }
-
-    // simple function that returns back the JWKS as a string
-    async fn fetch_jwks(url: &str) -> Result<String, BoxError> {
-        let resp = reqwest::get(url).await?.text().await?;
-
-        Ok(resp)
-    }
-}
-
-impl Drop for JwksManager {
-    fn drop(&mut self) {
-        // `oneshot::Sender::send` consumes `self` so we use `take` to get
-        // an owned `hook` instead of a reference to it.
-        if let Some(hook) = self.shutdown_hook.take() {
-            // we send a message to let manager's task know that it should
-            // shutdown.
-            let _ = hook.send(true);
-        }
-    }
-}
+use crate::jwks_manager::JwksManager;
 
 // Configuration options for the actual plugin
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -147,6 +24,17 @@ pub struct Conf {
     jwks_url: String,
     token_header: Option<String>,
     token_prefix: Option<String>,
+}
+
+pub struct JwksPlugin {
+    #[allow(dead_code)]
+    configuration: Conf,
+    // Which header to use; defaults to "Authorization"
+    token_header: String,
+    // Which token prefix to use; defaults to "Bearer"
+    token_prefix: String,
+    // Struct used to manage the JWKS for validation
+    jwks_manager: JwksManager,
 }
 
 #[async_trait::async_trait]
@@ -234,7 +122,7 @@ impl Plugin for JwksPlugin {
                         // Prepare an HTTP 400 response with a GraphQL error message
                         return failure_message(
                             req.context,
-                            "Authorization' header is not convertible to a string".to_string(),
+                            "Authorization header is not convertible to a string".to_string(),
                             StatusCode::BAD_REQUEST,
                         );
                     }
@@ -268,10 +156,10 @@ impl Plugin for JwksPlugin {
                 let jwt_parts: Vec<&str> = jwt_value.splitn(2, ' ').collect();
 
                 if jwt_parts.len() != 2 && token_prefix.chars().count() > 0 {
-                    // Prepare an HTTP 400 response with a GraphQL error message
+                    // FIXME: 400 or 401? Prepare an HTTP 400 response with a GraphQL error message
                     return failure_message(
                         req.context,
-                        "Header is not correctly formatted".to_string(),
+                        format!("{} header is not correctly formatted", &token_header),
                         StatusCode::UNAUTHORIZED,
                     );
                 }
@@ -331,7 +219,8 @@ impl Plugin for JwksPlugin {
                             );
 
                             // check the result; if an error, throw an error to the requestor, otherwise set the decoded_token to the value
-                            if let Err(_e) = token_result {
+                            if let Err(e) = token_result {
+                                tracing::warn!("JWT validation error: {}", e);
                                 return failure_message(
                                     req.context,
                                     "Invalid JWT".to_string(),
