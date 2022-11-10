@@ -13,10 +13,14 @@ use reqwest::header::HeaderValue;
 use reqwest::StatusCode;
 use schemars::JsonSchema;
 use serde::Deserialize;
+use serde_json_bytes::{json, Map as JsonMap};
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
 use crate::jwks_manager::JwksManager;
+
+const DEFAULT_AUTHORIZATION_HEADER: &str = "Authorization";
+const DEFAULT_TOKEN_PREFIX: &str = "Bearer";
 
 // Configuration options for the actual plugin
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -47,12 +51,12 @@ impl Plugin for JwksPlugin {
         // Setting sane defaults for the plugin
         let token_header = match configuration.token_header {
             Some(ref x) => x.trim().to_string(),
-            None => "Authorization".to_string(),
+            None => DEFAULT_AUTHORIZATION_HEADER.to_string(),
         };
 
         let token_prefix = match configuration.token_prefix {
             Some(ref x) => x.trim().to_string(),
-            None => "Bearer".to_string(),
+            None => DEFAULT_TOKEN_PREFIX.to_string(),
         };
 
         // Instantiate the JwksManager (which fetches the initial JWKS value)
@@ -92,8 +96,10 @@ impl Plugin for JwksPlugin {
                     status: StatusCode,
                 ) -> Result<ControlFlow<supergraph::Response, supergraph::Request>, BoxError>
                 {
+                    let mut ext = JsonMap::with_capacity(1);
+                    ext.insert("error", json!(msg));
                     let res = supergraph::Response::error_builder()
-                        .error(graphql::Error::builder().message(msg).build())
+                        .error(graphql::Error::builder().message("FORBIDDEN").extensions(ext).build())
                         .status_code(status)
                         .context(context)
                         .build()?;
@@ -223,7 +229,7 @@ impl Plugin for JwksPlugin {
                                 tracing::warn!("JWT validation error: {}", e);
                                 return failure_message(
                                     req.context,
-                                    "Invalid JWT".to_string(),
+                                    e.to_string(),
                                     StatusCode::UNAUTHORIZED,
                                 );
                             }
