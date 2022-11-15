@@ -1,3 +1,4 @@
+use crate::jwks_manager::JwksManager;
 use apollo_router::graphql;
 use apollo_router::layers::ServiceBuilderExt;
 use apollo_router::plugin::Plugin;
@@ -6,7 +7,7 @@ use apollo_router::register_plugin;
 use apollo_router::services::subgraph;
 use apollo_router::services::supergraph;
 use apollo_router::Context;
-use jsonwebtoken::jwk::{AlgorithmParameters};
+use jsonwebtoken::jwk::AlgorithmParameters;
 use jsonwebtoken::{decode, decode_header, DecodingKey, Header, Validation};
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
@@ -17,7 +18,6 @@ use serde_json_bytes::{json, Map as JsonMap};
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
-use crate::jwks_manager::JwksManager;
 
 const DEFAULT_AUTHORIZATION_HEADER: &str = "Authorization";
 const DEFAULT_TOKEN_PREFIX: &str = "Bearer";
@@ -99,7 +99,12 @@ impl Plugin for JwksPlugin {
                     let mut ext = JsonMap::with_capacity(1);
                     ext.insert("error", json!(msg));
                     let res = supergraph::Response::error_builder()
-                        .error(graphql::Error::builder().message("FORBIDDEN").extensions(ext).build())
+                        .error(
+                            graphql::Error::builder()
+                                .message("FORBIDDEN")
+                                .extensions(ext)
+                                .build(),
+                        )
                         .status_code(status)
                         .context(context)
                         .build()?;

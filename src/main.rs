@@ -1,5 +1,5 @@
-mod plugins;
 mod jwks_manager;
+mod plugins;
 
 use anyhow::Result;
 

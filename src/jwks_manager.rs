@@ -1,12 +1,12 @@
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use jsonwebtoken::{jwk};
-use jsonwebtoken::jwk::{JwkSet};
+use jsonwebtoken::jwk;
+use jsonwebtoken::jwk::JwkSet;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::oneshot::Sender;
-use tower::{BoxError};
+use tower::BoxError;
 
 // JwksManager struct
 //     jwks: stores the jwks keyset within an Arc (for cross channel communication) and RwLock (to avoid race conditions) as a string, which is parsed
