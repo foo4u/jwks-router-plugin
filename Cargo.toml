@@ -23,6 +23,7 @@ schemars = "0.8.10"
 serde = "1.0.136"
 serde_json = "1.0.79"
 serde_json_bytes = "0.2.0"
+thiserror = "1.0.37"
 tokio = { version = "1.17.0", features = ["full"] }
 tower = { version = "0.4.12", features = ["full"] }
 tracing = "0.1.34"
