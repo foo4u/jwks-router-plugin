@@ -47,8 +47,7 @@ impl JwksPlugin {
         context: Context,
         msg: String,
         status: StatusCode,
-    ) -> Result<ControlFlow<supergraph::Response, supergraph::Request>, BoxError>
-    {
+    ) -> Result<ControlFlow<supergraph::Response, supergraph::Request>, BoxError> {
         let mut ext = JsonMap::with_capacity(1);
         ext.insert("error", json!(msg));
         let res = supergraph::Response::error_builder()
@@ -241,7 +240,9 @@ impl Plugin for JwksPlugin {
                             }
 
                             // push the JWT Header into the context to pass down to subgraphs
-                            if let Err(e) = req.context.insert(JWT_CONTEXT_KEY, jwt_value.to_owned()) {
+                            if let Err(e) =
+                                req.context.insert(JWT_CONTEXT_KEY, jwt_value.to_owned())
+                            {
                                 return JwksPlugin::authentication_error(
                                     req.context,
                                     format!("couldn't store JWT header in context: {}", e),
