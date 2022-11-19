@@ -21,6 +21,7 @@ use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
 
 const DEFAULT_AUTHORIZATION_HEADER: &str = "Authorization";
 const DEFAULT_TOKEN_PREFIX: &str = "Bearer";
+const JWT_CONTEXT_KEY: &str = "jwt-claims";
 
 // Configuration options for the actual plugin
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -39,6 +40,29 @@ pub struct JwksPlugin {
     token_prefix: String,
     // Struct used to manage the JWKS for validation
     jwks_manager: JwksManager,
+}
+
+impl JwksPlugin {
+    fn authentication_error(
+        context: Context,
+        msg: String,
+        status: StatusCode,
+    ) -> Result<ControlFlow<supergraph::Response, supergraph::Request>, BoxError>
+    {
+        let mut ext = JsonMap::with_capacity(1);
+        ext.insert("error", json!(msg));
+        let res = supergraph::Response::error_builder()
+            .error(
+                graphql::Error::builder()
+                    .message("FORBIDDEN")
+                    .extensions(ext)
+                    .build(),
+            )
+            .status_code(status)
+            .context(context)
+            .build()?;
+        Ok(ControlFlow::Break(res))
+    }
 }
 
 #[async_trait::async_trait]
@@ -88,29 +112,6 @@ impl Plugin for JwksPlugin {
 
         ServiceBuilder::new()
             .checkpoint(move |req: supergraph::Request| {
-                // We are going to do a lot of similar checking so let's define a local function
-                // to help reduce repetition
-                fn failure_message(
-                    context: Context,
-                    msg: String,
-                    status: StatusCode,
-                ) -> Result<ControlFlow<supergraph::Response, supergraph::Request>, BoxError>
-                {
-                    let mut ext = JsonMap::with_capacity(1);
-                    ext.insert("error", json!(msg));
-                    let res = supergraph::Response::error_builder()
-                        .error(
-                            graphql::Error::builder()
-                                .message("FORBIDDEN")
-                                .extensions(ext)
-                                .build(),
-                        )
-                        .status_code(status)
-                        .context(context)
-                        .build()?;
-                    Ok(ControlFlow::Break(res))
-                }
-
                 // The http_request is stored in a `RouterRequest` context.
                 // We are going to check the headers for the presence of the header we're looking for as set by the configuration or default value
                 let jwt_value_result = match req.supergraph_request.headers().get(&token_header) {
@@ -118,7 +119,7 @@ impl Plugin for JwksPlugin {
                     None =>
                     // Prepare an HTTP 401 response with a GraphQL error message
                     {
-                        return failure_message(
+                        return JwksPlugin::authentication_error(
                             req.context,
                             format!("Missing '{}' header", token_header),
                             StatusCode::UNAUTHORIZED,
@@ -131,7 +132,7 @@ impl Plugin for JwksPlugin {
                     Ok(value) => value,
                     Err(_not_a_string_error) => {
                         // Prepare an HTTP 400 response with a GraphQL error message
-                        return failure_message(
+                        return JwksPlugin::authentication_error(
                             req.context,
                             "Authorization header is not convertible to a string".to_string(),
                             StatusCode::BAD_REQUEST,
@@ -155,7 +156,7 @@ impl Plugin for JwksPlugin {
                     && token_prefix.chars().count() > 0
                 {
                     // Prepare an HTTP 400 response with a GraphQL error message
-                    return failure_message(
+                    return JwksPlugin::authentication_error(
                         req.context,
                         "Header is not correctly formatted".to_string(),
                         StatusCode::UNAUTHORIZED,
@@ -168,7 +169,7 @@ impl Plugin for JwksPlugin {
 
                 if jwt_parts.len() != 2 && token_prefix.chars().count() > 0 {
                     // FIXME: 400 or 401? Prepare an HTTP 400 response with a GraphQL error message
-                    return failure_message(
+                    return JwksPlugin::authentication_error(
                         req.context,
                         format!("{} header is not correctly formatted", &token_header),
                         StatusCode::UNAUTHORIZED,
@@ -192,7 +193,7 @@ impl Plugin for JwksPlugin {
                 match header {
                     Ok(v) => jwt_head = v,
                     Err(_v) => {
-                        return failure_message(
+                        return JwksPlugin::authentication_error(
                             req.context,
                             "JWT header section is not correctly formatted".to_string(),
                             StatusCode::BAD_REQUEST,
@@ -205,7 +206,7 @@ impl Plugin for JwksPlugin {
                 let kid = match jwt_head.kid {
                     Some(k) => k,
                     None => {
-                        return failure_message(
+                        return JwksPlugin::authentication_error(
                             req.context,
                             "Missing valid kid value".to_string(),
                             StatusCode::BAD_REQUEST,
@@ -232,7 +233,7 @@ impl Plugin for JwksPlugin {
                             // check the result; if an error, throw an error to the requestor, otherwise set the decoded_token to the value
                             if let Err(e) = token_result {
                                 tracing::warn!("JWT validation error: {}", e);
-                                return failure_message(
+                                return JwksPlugin::authentication_error(
                                     req.context,
                                     e.to_string(),
                                     StatusCode::UNAUTHORIZED,
@@ -240,8 +241,8 @@ impl Plugin for JwksPlugin {
                             }
 
                             // push the JWT Header into the context to pass down to subgraphs
-                            if let Err(e) = req.context.insert("JWTHeader", jwt_value.to_owned()) {
-                                return failure_message(
+                            if let Err(e) = req.context.insert(JWT_CONTEXT_KEY, jwt_value.to_owned()) {
+                                return JwksPlugin::authentication_error(
                                     req.context,
                                     format!("couldn't store JWT header in context: {}", e),
                                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -249,14 +250,14 @@ impl Plugin for JwksPlugin {
                             };
                             Ok(ControlFlow::Continue(req))
                         }
-                        _ => failure_message(
+                        _ => JwksPlugin::authentication_error(
                             req.context,
                             "Unable to load RSA keys".to_string(),
                             StatusCode::INTERNAL_SERVER_ERROR,
                         ),
                     }
                 } else {
-                    failure_message(
+                    JwksPlugin::authentication_error(
                         req.context,
                         "Invalid JWT".to_string(),
                         StatusCode::UNAUTHORIZED,
@@ -277,7 +278,7 @@ impl Plugin for JwksPlugin {
 
         ServiceBuilder::new()
             .map_request(move |mut req: subgraph::Request| {
-                if let Ok(Some(data)) = req.context.get::<_, String>("JWTHeader") {
+                if let Ok(Some(data)) = req.context.get::<_, String>(JWT_CONTEXT_KEY) {
                     let th = token_header.to_string();
                     req.subgraph_request.headers_mut().insert(
                         HeaderName::from_bytes(th.as_bytes()).unwrap(),
