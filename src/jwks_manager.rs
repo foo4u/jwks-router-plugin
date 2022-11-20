@@ -1,7 +1,6 @@
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use jsonwebtoken::jwk;
 use jsonwebtoken::jwk::JwkSet;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
@@ -24,7 +23,7 @@ pub struct JwksManager {
 impl JwksManager {
     /// Returns a new implementation of the JwksManager with a valid JWKS
     pub async fn new(url: &str) -> Result<Self, BoxError> {
-        let jwks_string = JwksManager::fetch_jwks(url).await?;
+        let jwks_string = JwksManager::fetch_key_set(url).await?;
         Ok(Self {
             jwks: Arc::new(RwLock::new(jwks_string)),
             url: url.to_string(),
@@ -65,7 +64,7 @@ impl JwksManager {
                     tracing::debug!("Fetching JWKS from {}", &url);
 
                     // ... fetch the JWKS using the fetch_jwks function...
-                    match JwksManager::fetch_jwks(&url).await {
+                    match JwksManager::fetch_key_set(&url).await {
                         Ok(jwks_response) => {
                             tracing::debug!("{}", jwks_response);
 
@@ -88,15 +87,16 @@ impl JwksManager {
         });
     }
 
-    // Returns the keyset (aka the JWKS in a format used by the library)
-    pub fn retrieve_keyset(&self) -> Result<JwkSet, BoxError> {
-        let keyset = self.jwks.read().unwrap();
-        let jwks: jwk::JwkSet = serde_json::from_str(&keyset)?;
+    // Returns the key set (aka the JWKS in a format used by the library)
+    pub fn retrieve_key_set(&self) -> Result<JwkSet, BoxError> {
+        // FIXME: is this unsafe?
+        let key_set = self.jwks.read().unwrap();
+        let jwks: JwkSet = serde_json::from_str(&key_set)?;
         Ok(jwks)
     }
 
     // simple function that returns back the JWKS as a string
-    async fn fetch_jwks(url: &str) -> Result<String, BoxError> {
+    async fn fetch_key_set(url: &str) -> Result<String, BoxError> {
         let resp = reqwest::get(url).await?.text().await?;
 
         Ok(resp)
