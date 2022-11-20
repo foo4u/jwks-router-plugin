@@ -29,7 +29,7 @@ const JWT_CONTEXT_KEY: &str = "jwt-claims";
 enum JwtValidationError {
     #[error("JWT header missing a kid")]
     MissingKid,
-    #[error("JWT FIXME")]
+    #[error("Invalid JWT {source}")]
     InvalidToken {
         #[from]
         source: jsonwebtoken::errors::Error, // backtrace: Backtrace
