@@ -1,4 +1,5 @@
 use crate::jwks_manager::JwksManager;
+use anyhow::anyhow;
 use apollo_router::graphql;
 use apollo_router::layers::ServiceBuilderExt;
 use apollo_router::plugin::Plugin;
@@ -8,7 +9,7 @@ use apollo_router::services::subgraph;
 use apollo_router::services::supergraph;
 use apollo_router::Context;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
-use jsonwebtoken::{Algorithm, decode, decode_header, DecodingKey, Header, TokenData, Validation};
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Header, TokenData, Validation};
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use reqwest::StatusCode;
@@ -17,7 +18,6 @@ use serde::Deserialize;
 use serde_json_bytes::{json, Map as JsonMap};
 use std::collections::HashMap;
 use std::ops::ControlFlow;
-use anyhow::{anyhow};
 use thiserror::Error;
 use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
 
@@ -32,13 +32,12 @@ enum JwtValidationError {
     #[error("JWT FIXME")]
     InvalidToken {
         #[from]
-        source: jsonwebtoken::errors::Error
-        // backtrace: Backtrace
+        source: jsonwebtoken::errors::Error, // backtrace: Backtrace
     },
     #[error("JWT kid {0} not found in JWK set")]
     UnknownKid(String),
     #[error("Unsupported JWT algorithm")]
-    UnsupportedAlgorithm(Algorithm)
+    UnsupportedAlgorithm(Algorithm),
 }
 
 // Configuration options for the actual plugin
@@ -84,7 +83,6 @@ impl JwksPlugin {
     /// Parses the JWT header value and returns it as string; returns an
     /// error if the JWT is invalid.
     fn parse_jwt_value(token_prefix: &String, jwt_value: &str) -> Result<String, anyhow::Error> {
-
         // Make sure the format of our message matches our expectations
         // Technically, the spec is case sensitive, but let's accept
         // case variations
@@ -114,20 +112,21 @@ impl JwksPlugin {
         } else {
             0
         }]
-            .trim_end();
+        .trim_end();
 
-        return Ok(jwt.to_string())
+        return Ok(jwt.to_string());
     }
 
-    fn validate(jwt: &str, jwks: &JwkSet) -> Result<TokenData<HashMap<String, serde_json::Value>>, JwtValidationError> {
+    fn validate(
+        jwt: &str,
+        jwks: &JwkSet,
+    ) -> Result<TokenData<HashMap<String, serde_json::Value>>, JwtValidationError> {
         let jwt_head: Header = decode_header(jwt)?;
 
         // FIXME: do this inline
         let kid = match jwt_head.kid {
             Some(k) => k,
-            None => {
-                return Err(JwtValidationError::MissingKid{})
-            }
+            None => return Err(JwtValidationError::MissingKid {}),
         };
 
         let token_result;
@@ -136,18 +135,14 @@ impl JwksPlugin {
         match jwk.algorithm {
             AlgorithmParameters::RSA(ref rsa) => {
                 // set up the decoding key for the JWT from the JWK
-                let decoding_key =
-                    DecodingKey::from_rsa_components(&rsa.n, &rsa.e).unwrap();
+                let decoding_key = DecodingKey::from_rsa_components(&rsa.n, &rsa.e).unwrap();
                 let validation = Validation::new(jwk.common.algorithm.unwrap());
 
                 // attempt to decode
-                token_result = decode::<HashMap<String, serde_json::Value>>(
-                    jwt,
-                    &decoding_key,
-                    &validation,
-                );
+                token_result =
+                    decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation);
             }
-            _ => return Err(JwtValidationError::UnsupportedAlgorithm(jwt_head.alg))
+            _ => return Err(JwtValidationError::UnsupportedAlgorithm(jwt_head.alg)),
         }
 
         return match token_result {
@@ -156,7 +151,7 @@ impl JwksPlugin {
                 tracing::warn!("JWT validation error: {}", e);
                 return Err(JwtValidationError::InvalidToken { source: e }); // , backtrace: Backtrace::capture() })
             }
-        }
+        };
     }
 }
 
@@ -242,7 +237,7 @@ impl Plugin for JwksPlugin {
                         return JwksPlugin::authentication_error(
                             req.context,
                             format!("{}", error),
-                            StatusCode::UNAUTHORIZED
+                            StatusCode::UNAUTHORIZED,
                         )
                     }
                 };
@@ -251,14 +246,12 @@ impl Plugin for JwksPlugin {
                     return JwksPlugin::authentication_error(
                         req.context,
                         format!("{}", e),
-                        StatusCode::INTERNAL_SERVER_ERROR // FIXME: need to see if this true
-                    )
+                        StatusCode::INTERNAL_SERVER_ERROR, // FIXME: need to see if this true
+                    );
                 }
 
                 // push the JWT Header into the context to pass down to subgraphs
-                if let Err(e) =
-                req.context.insert(JWT_CONTEXT_KEY, jwt_value.to_owned())
-                {
+                if let Err(e) = req.context.insert(JWT_CONTEXT_KEY, jwt_value.to_owned()) {
                     return JwksPlugin::authentication_error(
                         req.context,
                         format!("couldn't store JWT header in context: {}", e),
