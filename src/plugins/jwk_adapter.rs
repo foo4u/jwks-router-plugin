@@ -1,4 +1,5 @@
 use crate::jwks_manager::JwksManager;
+use crate::plugins::error::JwtValidationError;
 use anyhow::anyhow;
 use apollo_router::graphql;
 use apollo_router::layers::ServiceBuilderExt;
@@ -19,17 +20,16 @@ use serde_json_bytes::{json, Map as JsonMap};
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
-use crate::plugins::error::JwtValidationError;
 
-pub struct JwkAdapter {
-
-}
+pub struct JwkAdapter {}
 
 impl JwkAdapter {
-
     /// Parses the JWT header value and returns it as string; returns an
     /// error if the JWT is invalid.
-    pub fn parse_jwt_value(token_prefix: &String, jwt_value: &str) -> Result<String, anyhow::Error> {
+    pub fn parse_jwt_value(
+        token_prefix: &String,
+        jwt_value: &str,
+    ) -> Result<String, anyhow::Error> {
         // Make sure the format of our message matches our expectations
         // Technically, the spec is case sensitive, but let's accept
         // case variations
@@ -59,7 +59,7 @@ impl JwkAdapter {
         } else {
             0
         }]
-            .trim_end();
+        .trim_end();
 
         return Ok(jwt.to_string());
     }

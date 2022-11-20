@@ -1,5 +1,5 @@
-use thiserror::Error;
 use jsonwebtoken::Algorithm;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum JwtValidationError {

@@ -1,4 +1,6 @@
 use crate::jwks_manager::JwksManager;
+use crate::plugins::error::JwtValidationError;
+use crate::plugins::jwk_adapter::JwkAdapter;
 use anyhow::anyhow;
 use apollo_router::graphql;
 use apollo_router::layers::ServiceBuilderExt;
@@ -19,8 +21,6 @@ use serde_json_bytes::{json, Map as JsonMap};
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
-use crate::plugins::error::JwtValidationError;
-use crate::plugins::jwk_adapter::JwkAdapter;
 
 const DEFAULT_AUTHORIZATION_HEADER: &str = "Authorization";
 const DEFAULT_TOKEN_PREFIX: &str = "Bearer";
