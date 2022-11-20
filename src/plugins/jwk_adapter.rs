@@ -1,25 +1,8 @@
-use crate::jwks_manager::JwksManager;
 use crate::plugins::error::JwtValidationError;
 use anyhow::anyhow;
-use apollo_router::graphql;
-use apollo_router::layers::ServiceBuilderExt;
-use apollo_router::plugin::Plugin;
-use apollo_router::plugin::PluginInit;
-use apollo_router::register_plugin;
-use apollo_router::services::subgraph;
-use apollo_router::services::supergraph;
-use apollo_router::Context;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::{decode, decode_header, DecodingKey, Header, TokenData, Validation};
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
-use reqwest::StatusCode;
-use schemars::JsonSchema;
-use serde::Deserialize;
-use serde_json_bytes::{json, Map as JsonMap};
 use std::collections::HashMap;
-use std::ops::ControlFlow;
-use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
 
 pub struct JwkAdapter {}
 
