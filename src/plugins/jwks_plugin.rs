@@ -131,27 +131,23 @@ impl JwksPlugin {
         };
 
         let token_result;
+        let jwk = jwks.find(&kid).ok_or(JwtValidationError::UnknownKid(kid))?;
 
-        // From the keyset, find the matching kid value and then attempt to decode
-        if let Some(jwk) = jwks.find(&kid) {
-            match jwk.algorithm {
-                AlgorithmParameters::RSA(ref rsa) => {
-                    // set up the decoding key for the JWT from the JWK
-                    let decoding_key =
-                        DecodingKey::from_rsa_components(&rsa.n, &rsa.e).unwrap();
-                    let validation = Validation::new(jwk.common.algorithm.unwrap());
+        match jwk.algorithm {
+            AlgorithmParameters::RSA(ref rsa) => {
+                // set up the decoding key for the JWT from the JWK
+                let decoding_key =
+                    DecodingKey::from_rsa_components(&rsa.n, &rsa.e).unwrap();
+                let validation = Validation::new(jwk.common.algorithm.unwrap());
 
-                    // attempt to decode
-                    token_result = decode::<HashMap<String, serde_json::Value>>(
-                        jwt,
-                        &decoding_key,
-                        &validation,
-                    );
-                }
-                _ => return Err(JwtValidationError::UnsupportedAlgorithm(jwt_head.alg))
+                // attempt to decode
+                token_result = decode::<HashMap<String, serde_json::Value>>(
+                    jwt,
+                    &decoding_key,
+                    &validation,
+                );
             }
-        } else {
-            return Err(JwtValidationError::UnknownKid(kid));
+            _ => return Err(JwtValidationError::UnsupportedAlgorithm(jwt_head.alg))
         }
 
         return match token_result {
