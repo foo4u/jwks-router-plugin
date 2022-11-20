@@ -16,6 +16,7 @@ use serde::Deserialize;
 use serde_json_bytes::{json, Map as JsonMap};
 use std::ops::ControlFlow;
 use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
+use super::error::JwtValidationError;
 
 const DEFAULT_AUTHORIZATION_HEADER: &str = "Authorization";
 const DEFAULT_TOKEN_PREFIX: &str = "Bearer";
@@ -150,10 +151,16 @@ impl Plugin for JwksPlugin {
                 };
 
                 if let Err(e) = JwkAdapter::validate(jwt.as_str(), &jwks) {
+                    let status_code = match e {
+                        JwtValidationError::MissingKid => StatusCode::BAD_REQUEST,
+                        JwtValidationError::UnknownKid(_) => StatusCode::BAD_REQUEST,
+                        JwtValidationError::UnsupportedAlgorithm(_) => StatusCode::BAD_REQUEST,
+                        _ => StatusCode::UNAUTHORIZED,
+                    };
                     return JwksPlugin::authentication_error(
                         req.context,
                         format!("{}", e),
-                        StatusCode::INTERNAL_SERVER_ERROR, // FIXME: need to see if this true
+                        status_code
                     );
                 }
 
