@@ -55,7 +55,7 @@ impl JwkAdapter {
         }]
         .trim_end();
 
-        return Ok(jwt.to_string());
+        Ok(jwt.to_string())
     }
 
     /// Validates the given JWT against the given jwk_set and returns the claims if valid;
@@ -69,24 +69,22 @@ impl JwkAdapter {
         let jwk = jwk_set
             .find(&kid)
             .ok_or(JwtValidationError::UnknownKid(kid))?;
-        let token_result;
 
-        match jwk.algorithm {
+        let token_result = match jwk.algorithm {
             AlgorithmParameters::RSA(ref rsa) => {
                 let decoding_key = DecodingKey::from_rsa_components(&rsa.n, &rsa.e).unwrap();
                 let validation = Validation::new(jwk.common.algorithm.unwrap());
-                token_result =
-                    decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation);
+                decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation)
             }
             _ => return Err(JwtValidationError::UnsupportedAlgorithm(jwt_head.alg)),
-        }
+        };
 
-        return match token_result {
+        match token_result {
             Ok(token) => Ok(token),
             Err(e) => {
                 tracing::warn!("JWT validation error: {}", e);
-                return Err(JwtValidationError::InvalidToken { source: e });
+                Err(JwtValidationError::InvalidToken { source: e })
             }
-        };
+        }
     }
 }
