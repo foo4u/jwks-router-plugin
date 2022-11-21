@@ -1,3 +1,18 @@
+/*
+ * (C) Copyright 2022 Scott Rossillo and others.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+*/
 use crate::plugins::error::JwtValidationError;
 use anyhow::anyhow;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
@@ -7,8 +22,7 @@ use std::collections::HashMap;
 pub struct JwkAdapter {}
 
 impl JwkAdapter {
-    /// Parses the JWT header value and returns it as string; returns an
-    /// error if the JWT is invalid.
+    /// Parses the JWT header value and returns it as string if valid; an error otherwise.
     pub fn parse_jwt_value(
         token_prefix: &String,
         jwt_value: &str,
@@ -16,9 +30,6 @@ impl JwkAdapter {
         // Make sure the format of our message matches our expectations
         // Technically, the spec is case sensitive, but let's accept
         // case variations
-        // this also adds the required space at the end for the token prefix
-        // adding a new variable is used for splitting, however the initial prefix should be preserved for skipping empty string
-        // prefixes
         if !jwt_value
             .to_uppercase()
             .as_str()
@@ -47,28 +58,21 @@ impl JwkAdapter {
         return Ok(jwt.to_string());
     }
 
+    /// Validates the given JWT against the given jwk_set and returns the claims if valid;
+    /// a JwtValidationError otherwise.
     pub fn validate(
         jwt: &str,
-        jwks: &JwkSet,
+        jwk_set: &JwkSet,
     ) -> Result<TokenData<HashMap<String, serde_json::Value>>, JwtValidationError> {
         let jwt_head: Header = decode_header(jwt)?;
-
-        // FIXME: do this inline
-        let kid = match jwt_head.kid {
-            Some(k) => k,
-            None => return Err(JwtValidationError::MissingKid {}),
-        };
-
+        let kid = jwt_head.kid.ok_or(JwtValidationError::MissingKid)?;
+        let jwk = jwk_set.find(&kid).ok_or(JwtValidationError::UnknownKid(kid))?;
         let token_result;
-        let jwk = jwks.find(&kid).ok_or(JwtValidationError::UnknownKid(kid))?;
 
         match jwk.algorithm {
             AlgorithmParameters::RSA(ref rsa) => {
-                // set up the decoding key for the JWT from the JWK
                 let decoding_key = DecodingKey::from_rsa_components(&rsa.n, &rsa.e).unwrap();
                 let validation = Validation::new(jwk.common.algorithm.unwrap());
-
-                // attempt to decode
                 token_result =
                     decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation);
             }
@@ -79,7 +83,7 @@ impl JwkAdapter {
             Ok(token) => Ok(token),
             Err(e) => {
                 tracing::warn!("JWT validation error: {}", e);
-                return Err(JwtValidationError::InvalidToken { source: e }); // , backtrace: Backtrace::capture() })
+                return Err(JwtValidationError::InvalidToken { source: e });
             }
         };
     }
