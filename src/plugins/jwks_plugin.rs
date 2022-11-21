@@ -1,4 +1,5 @@
 use crate::jwks_manager::JwksManager;
+use crate::plugins::jwk_adapter::JwkAdapter;
 use apollo_router::graphql;
 use apollo_router::layers::ServiceBuilderExt;
 use apollo_router::plugin::Plugin;
@@ -7,17 +8,15 @@ use apollo_router::register_plugin;
 use apollo_router::services::subgraph;
 use apollo_router::services::supergraph;
 use apollo_router::Context;
-use jsonwebtoken::jwk::AlgorithmParameters;
-use jsonwebtoken::{decode, decode_header, DecodingKey, Header, Validation};
 use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use reqwest::StatusCode;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json_bytes::{json, Map as JsonMap};
-use std::collections::HashMap;
 use std::ops::ControlFlow;
 use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
+use super::error::JwtValidationError;
 
 const DEFAULT_AUTHORIZATION_HEADER: &str = "Authorization";
 const DEFAULT_TOKEN_PREFIX: &str = "Bearer";
@@ -71,7 +70,7 @@ impl Plugin for JwksPlugin {
     async fn new(init: PluginInit<Self::Config>) -> Result<Self, BoxError> {
         let configuration = init.config;
 
-        // Setting sane defaults for the plugin
+        // Set sane defaults for the plugin
         let token_header = match configuration.token_header {
             Some(ref x) => x.trim().to_string(),
             None => DEFAULT_AUTHORIZATION_HEADER.to_string(),
@@ -106,13 +105,12 @@ impl Plugin for JwksPlugin {
         let token_prefix = self.token_prefix.clone();
         let jwks = self
             .jwks_manager
-            .retrieve_keyset()
-            .expect("Error retrieving JWKS from the JWKSManager");
+            .retrieve_key_set()
+            .expect("Error retrieving JWKS from the JWKSManager"); // FIXME: this will crash the router
 
         ServiceBuilder::new()
             .checkpoint(move |req: supergraph::Request| {
                 // The http_request is stored in a `RouterRequest` context.
-                // We are going to check the headers for the presence of the header we're looking for as set by the configuration or default value
                 let jwt_value_result = match req.supergraph_request.headers().get(&token_header) {
                     Some(value) => value.to_str(),
                     None =>
@@ -127,8 +125,8 @@ impl Plugin for JwksPlugin {
                 };
 
                 // If we find the header, but can't convert it to a string, let the client know
-                let jwt_value_untrimmed = match jwt_value_result {
-                    Ok(value) => value,
+                let jwt_value = match jwt_value_result {
+                    Ok(value) => value.trim(),
                     Err(_not_a_string_error) => {
                         // Prepare an HTTP 400 response with a GraphQL error message
                         return JwksPlugin::authentication_error(
@@ -139,131 +137,42 @@ impl Plugin for JwksPlugin {
                     }
                 };
 
-                // Let's trim out leading and trailing whitespace to be accommodating
-                let jwt_value = jwt_value_untrimmed.trim();
-
-                // Make sure the format of our message matches our expectations
-                // Technically, the spec is case sensitive, but let's accept
-                // case variations
-                // this also adds the required space at the end for the token prefix
-                // adding a new variable is used for splitting, however the initial prefix should be preserved for skipping empty string
-                // prefixes
-                if !jwt_value
-                    .to_uppercase()
-                    .as_str()
-                    .starts_with(&format!("{} ", token_prefix).to_uppercase())
-                    && token_prefix.chars().count() > 0
-                {
-                    // Prepare an HTTP 400 response with a GraphQL error message
-                    return JwksPlugin::authentication_error(
-                        req.context,
-                        "Header is not correctly formatted".to_string(),
-                        StatusCode::UNAUTHORIZED,
-                    );
-                }
-
-                // We know we have a "space" if the charcount is > 0, since we checked above. Split our string other
-                // in (at most 2) sections.
-                let jwt_parts: Vec<&str> = jwt_value.splitn(2, ' ').collect();
-
-                if jwt_parts.len() != 2 && token_prefix.chars().count() > 0 {
-                    // FIXME: 400 or 401? Prepare an HTTP 400 response with a GraphQL error message
-                    return JwksPlugin::authentication_error(
-                        req.context,
-                        format!("{} header is not correctly formatted", &token_header),
-                        StatusCode::UNAUTHORIZED,
-                    );
-                }
-
                 // Trim off any trailing white space (not valid in BASE64 encoding)
-                let jwt = jwt_parts[if token_prefix.chars().count() > 0 {
-                    1
-                } else {
-                    0
-                }]
-                .trim_end();
-
-                // decode the header (first part of the JWT)
-                let header = decode_header(jwt);
-
-                let jwt_head: Header;
-
-                // Validate the JWT header; if not valid, return an error to the client
-                match header {
-                    Ok(v) => jwt_head = v,
-                    Err(_v) => {
+                let jwt = match JwkAdapter::parse_jwt_value(&token_prefix, jwt_value) {
+                    Ok(token) => token,
+                    Err(error) => {
                         return JwksPlugin::authentication_error(
                             req.context,
-                            "JWT header section is not correctly formatted".to_string(),
-                            StatusCode::BAD_REQUEST,
-                        )
-                    }
-                }
-
-                // Find the key ID (kid) value from the header; this may not exist for symmetrically signed JWTs, but
-                // that is out of scope for this plugin; if you need symmetrically signed plugins, see: https://github.com/apollographql/router/tree/main/examples/jwt-auth
-                let kid = match jwt_head.kid {
-                    Some(k) => k,
-                    None => {
-                        return JwksPlugin::authentication_error(
-                            req.context,
-                            "Missing valid kid value".to_string(),
-                            StatusCode::BAD_REQUEST,
+                            format!("{}", error),
+                            StatusCode::UNAUTHORIZED,
                         )
                     }
                 };
 
-                // From the keyset, find the matching kid value and then attempt to decode
-                if let Some(jwk) = jwks.find(&kid) {
-                    match jwk.algorithm {
-                        AlgorithmParameters::RSA(ref rsa) => {
-                            // set up the decoding key for the JWT from the JWK
-                            let decoding_key =
-                                DecodingKey::from_rsa_components(&rsa.n, &rsa.e).unwrap();
-                            let validation = Validation::new(jwk.common.algorithm.unwrap());
-
-                            // attempt to decode
-                            let token_result = decode::<HashMap<String, serde_json::Value>>(
-                                jwt,
-                                &decoding_key,
-                                &validation,
-                            );
-
-                            // check the result; if an error, throw an error to the requestor, otherwise set the decoded_token to the value
-                            if let Err(e) = token_result {
-                                tracing::warn!("JWT validation error: {}", e);
-                                return JwksPlugin::authentication_error(
-                                    req.context,
-                                    e.to_string(),
-                                    StatusCode::UNAUTHORIZED,
-                                );
-                            }
-
-                            // push the JWT Header into the context to pass down to subgraphs
-                            if let Err(e) =
-                                req.context.insert(JWT_CONTEXT_KEY, jwt_value.to_owned())
-                            {
-                                return JwksPlugin::authentication_error(
-                                    req.context,
-                                    format!("couldn't store JWT header in context: {}", e),
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                );
-                            };
-                            Ok(ControlFlow::Continue(req))
-                        }
-                        _ => JwksPlugin::authentication_error(
-                            req.context,
-                            "Unable to load RSA keys".to_string(),
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                        ),
-                    }
-                } else {
-                    JwksPlugin::authentication_error(
+                if let Err(e) = JwkAdapter::validate(jwt.as_str(), &jwks) {
+                    let status_code = match e {
+                        JwtValidationError::MissingKid => StatusCode::BAD_REQUEST,
+                        JwtValidationError::UnknownKid(_) => StatusCode::BAD_REQUEST,
+                        JwtValidationError::UnsupportedAlgorithm(_) => StatusCode::BAD_REQUEST,
+                        _ => StatusCode::UNAUTHORIZED,
+                    };
+                    return JwksPlugin::authentication_error(
                         req.context,
-                        "Invalid JWT".to_string(),
-                        StatusCode::UNAUTHORIZED,
-                    )
+                        format!("{}", e),
+                        status_code
+                    );
                 }
+
+                // push the JWT Header into the context to pass down to subgraphs
+                if let Err(e) = req.context.insert(JWT_CONTEXT_KEY, jwt_value.to_owned()) {
+                    return JwksPlugin::authentication_error(
+                        req.context,
+                        format!("couldn't store JWT header in context: {}", e),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    );
+                };
+
+                Ok(ControlFlow::Continue(req))
             })
             .service(service)
             .boxed()
