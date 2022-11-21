@@ -1,3 +1,4 @@
+use super::error::JwtValidationError;
 use crate::jwks_manager::JwksManager;
 use crate::plugins::jwk_adapter::JwkAdapter;
 use apollo_router::graphql;
@@ -16,7 +17,6 @@ use serde::Deserialize;
 use serde_json_bytes::{json, Map as JsonMap};
 use std::ops::ControlFlow;
 use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
-use super::error::JwtValidationError;
 
 const DEFAULT_AUTHORIZATION_HEADER: &str = "Authorization";
 const DEFAULT_TOKEN_PREFIX: &str = "Bearer";
@@ -159,7 +159,7 @@ impl Plugin for JwksPlugin {
                     return JwksPlugin::authentication_error(
                         req.context,
                         format!("{}", e),
-                        status_code
+                        status_code,
                     );
                 }
 

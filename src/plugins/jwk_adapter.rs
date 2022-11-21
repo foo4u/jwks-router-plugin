@@ -66,7 +66,9 @@ impl JwkAdapter {
     ) -> Result<TokenData<HashMap<String, serde_json::Value>>, JwtValidationError> {
         let jwt_head: Header = decode_header(jwt)?;
         let kid = jwt_head.kid.ok_or(JwtValidationError::MissingKid)?;
-        let jwk = jwk_set.find(&kid).ok_or(JwtValidationError::UnknownKid(kid))?;
+        let jwk = jwk_set
+            .find(&kid)
+            .ok_or(JwtValidationError::UnknownKid(kid))?;
         let token_result;
 
         match jwk.algorithm {
