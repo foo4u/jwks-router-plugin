@@ -6,11 +6,8 @@ use apollo_router::layers::ServiceBuilderExt;
 use apollo_router::plugin::Plugin;
 use apollo_router::plugin::PluginInit;
 use apollo_router::register_plugin;
-use apollo_router::services::subgraph;
 use apollo_router::services::supergraph;
 use apollo_router::Context;
-use reqwest::header::HeaderName;
-use reqwest::header::HeaderValue;
 use reqwest::StatusCode;
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -20,7 +17,6 @@ use tower::{util::BoxService, BoxError, ServiceBuilder, ServiceExt};
 
 const DEFAULT_AUTHORIZATION_HEADER: &str = "Authorization";
 const DEFAULT_TOKEN_PREFIX: &str = "Bearer";
-const JWT_CONTEXT_KEY: &str = "jwt-claims";
 
 // Configuration options for the actual plugin
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -163,39 +159,7 @@ impl Plugin for JwksPlugin {
                     );
                 }
 
-                // push the JWT Header into the context to pass down to subgraphs
-                if let Err(e) = req.context.insert(JWT_CONTEXT_KEY, jwt_value.to_owned()) {
-                    return JwksPlugin::authentication_error(
-                        req.context,
-                        format!("couldn't store JWT header in context: {}", e),
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                    );
-                };
-
                 Ok(ControlFlow::Continue(req))
-            })
-            .service(service)
-            .boxed()
-    }
-
-    // used to forward the header from the context set above
-    fn subgraph_service(
-        &self,
-        _name: &str,
-        service: BoxService<subgraph::Request, subgraph::Response, BoxError>,
-    ) -> BoxService<subgraph::Request, subgraph::Response, BoxError> {
-        let token_header = self.token_header.clone();
-
-        ServiceBuilder::new()
-            .map_request(move |mut req: subgraph::Request| {
-                if let Ok(Some(data)) = req.context.get::<_, String>(JWT_CONTEXT_KEY) {
-                    let th = token_header.to_string();
-                    req.subgraph_request.headers_mut().insert(
-                        HeaderName::from_bytes(th.as_bytes()).unwrap(),
-                        HeaderValue::from_str(&data).unwrap(),
-                    );
-                }
-                req
             })
             .service(service)
             .boxed()
