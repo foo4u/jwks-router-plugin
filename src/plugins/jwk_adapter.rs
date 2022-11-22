@@ -17,7 +17,16 @@ use crate::plugins::error::JwtValidationError;
 use anyhow::anyhow;
 use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::{decode, decode_header, DecodingKey, Header, TokenData, Validation};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Claims {
+    exp: usize, // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
+    iat: usize, // Optional. Issued at (as UTC timestamp)
+    iss: String, // Optional. Issuer
+    nbf: usize, // Optional. Not Before (as UTC timestamp)
+}
 
 pub struct JwkAdapter {}
 
@@ -27,9 +36,6 @@ impl JwkAdapter {
         token_prefix: &String,
         jwt_value: &str,
     ) -> Result<String, anyhow::Error> {
-        // Make sure the format of our message matches our expectations
-        // Technically, the spec is case sensitive, but let's accept
-        // case variations
         if !jwt_value
             .to_uppercase()
             .as_str()
@@ -48,12 +54,7 @@ impl JwkAdapter {
         }
 
         // Trim off any trailing white space (not valid in BASE64 encoding)
-        let jwt = jwt_parts[if token_prefix.chars().count() > 0 {
-            1
-        } else {
-            0
-        }]
-        .trim_end();
+        let jwt = jwt_parts[1].trim_end();
 
         Ok(jwt.to_string())
     }
@@ -85,6 +86,142 @@ impl JwkAdapter {
                 tracing::warn!("JWT validation error: {}", e);
                 Err(JwtValidationError::InvalidToken { source: e })
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::plugins::error::JwtValidationError;
+    use crate::plugins::jwk_adapter::{Claims, JwkAdapter};
+    use jsonwebtoken::jwk::{
+        AlgorithmParameters, CommonParameters, Jwk, JwkSet, PublicKeyUse, RSAKeyParameters,
+    };
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use openssl::bn::BigNumRef;
+    use openssl::pkey::Private;
+    use openssl::rsa::Rsa;
+
+    fn create_rsa_key() -> Rsa<Private> {
+        Rsa::generate(2048).unwrap()
+    }
+
+    fn base64_encode_rsa(big_num_ref: &BigNumRef) -> String {
+        let hex_val = big_num_ref.to_hex_str().unwrap().to_string();
+        let bytes = hex::decode(hex_val).unwrap();
+        base64::encode_config(bytes, base64::URL_SAFE_NO_PAD)
+    }
+
+    fn create_jwk_set(rsa: &Rsa<Private>, kid: String) -> JwkSet {
+        let key = Jwk {
+            common: CommonParameters {
+                public_key_use: (Some(PublicKeyUse::Signature)),
+                key_operations: None,
+                algorithm: Some(Algorithm::RS256),
+                key_id: Some(kid),
+                x509_url: None,
+                x509_chain: None,
+                x509_sha1_fingerprint: None,
+                x509_sha256_fingerprint: None,
+            },
+            algorithm: AlgorithmParameters::RSA(RSAKeyParameters {
+                key_type: Default::default(),
+                n: base64_encode_rsa(rsa.n()),
+                e: base64_encode_rsa(rsa.e()),
+            }),
+        };
+        JwkSet { keys: vec![key] }
+    }
+
+    fn valid_claims() -> Claims {
+        Claims {
+            iat: chrono::Local::now().timestamp() as usize,
+            exp: chrono::Local::now().timestamp() as usize + 5000,
+            iss: "https://issuer.example.com".to_owned(),
+            nbf: chrono::Local::now().timestamp() as usize - 5000,
+        }
+    }
+
+    fn expired_claims() -> Claims {
+        Claims {
+            iat: chrono::Local::now().timestamp() as usize - 50_000,
+            exp: chrono::Local::now().timestamp() as usize - 5000,
+            iss: "https://issuer.example.com".to_owned(),
+            nbf: chrono::Local::now().timestamp() as usize - 50_000,
+        }
+    }
+
+    fn create_token(rsa: &Rsa<Private>, claims: Claims, kid: Option<String>) -> String {
+        let mut header = Header::new(Algorithm::RS256);
+        let private_key = rsa.private_key_to_pem().unwrap();
+        header.kid = kid;
+        encode(
+            &header,
+            &claims,
+            &EncodingKey::from_rsa_pem(&private_key).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn validate_rsa_jwt() {
+        let rsa = create_rsa_key();
+        let kid = "our_id".to_string();
+        let token = create_token(&rsa, valid_claims(), Some(kid.clone()));
+
+        let jwk_set = create_jwk_set(&rsa, kid);
+
+        assert!(JwkAdapter::validate(token.as_str(), &jwk_set).is_ok());
+    }
+
+    #[test]
+    fn validate_jwt_kid_missing_id() -> Result<(), String> {
+        let rsa = create_rsa_key();
+        let kid = "our_id".to_string();
+        let token = create_token(&rsa, valid_claims(), None);
+
+        let jwk_set = create_jwk_set(&rsa, kid.to_string());
+
+        match JwkAdapter::validate(token.as_str(), &jwk_set) {
+            Ok(_) => Err("expected validation to fail".to_string()),
+            Err(e) => match e {
+                JwtValidationError::MissingKid { .. } => Ok(()),
+                _ => Err("expected missing kid error".to_string()),
+            },
+        }
+    }
+
+    #[test]
+    fn validate_jwt_kid_not_found() -> Result<(), String> {
+        let rsa = create_rsa_key();
+        let kid = "our_id".to_string();
+        let token = create_token(&rsa, valid_claims(), Some(kid.clone()));
+
+        let jwk_set = create_jwk_set(&rsa, "fake".to_string());
+
+        match JwkAdapter::validate(token.as_str(), &jwk_set) {
+            Ok(_) => return Err("expected validation to fail".to_string()),
+            Err(e) => match e {
+                JwtValidationError::UnknownKid { .. } => Ok(()),
+                _ => Err("expected unknown kid error".to_string()),
+            },
+        }
+    }
+
+    #[test]
+    fn validate_jwt_expired() -> Result<(), String> {
+        let rsa = create_rsa_key();
+        let kid = "our_id".to_string();
+        let token = create_token(&rsa, expired_claims(), Some(kid.clone()));
+
+        let jwk_set = create_jwk_set(&rsa, kid);
+
+        match JwkAdapter::validate(token.as_str(), &jwk_set) {
+            Ok(_) => return Err("expected validation to fail".to_string()),
+            Err(e) => match e {
+                JwtValidationError::InvalidToken { .. } => Ok(()),
+                _ => Err("expected invalid token error".to_string()),
+            },
         }
     }
 }
