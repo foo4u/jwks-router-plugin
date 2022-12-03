@@ -22,10 +22,10 @@ use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
-    exp: usize, // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
-    iat: usize, // Optional. Issued at (as UTC timestamp)
-    iss: String, // Optional. Issuer
-    nbf: usize, // Optional. Not Before (as UTC timestamp)
+    pub exp: usize, // Required (validate_exp defaults to true in validation). Expiration time (as UTC timestamp)
+    pub iat: usize, // Optional. Issued at (as UTC timestamp)
+    pub iss: String, // Optional. Issuer
+    pub nbf: usize, // Optional. Not Before (as UTC timestamp)
 }
 
 pub struct JwkAdapter {}
