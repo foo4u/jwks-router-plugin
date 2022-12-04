@@ -12,7 +12,7 @@ use tower::BoxError;
 #[derive(Error, Debug)]
 pub enum KeySetError {
     #[error("JWKS endpoint responded with HTTP {0}")]
-    HttpError(StatusCode)
+    HttpError(StatusCode),
 }
 
 // JwksManager struct
@@ -112,7 +112,7 @@ impl JwksManager {
         let text;
 
         if res.status() != StatusCode::OK {
-           return Err(BoxError::from(KeySetError::HttpError(res.status())))
+            return Err(BoxError::from(KeySetError::HttpError(res.status())));
         }
 
         text = res.text().await?;

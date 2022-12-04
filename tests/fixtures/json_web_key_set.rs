@@ -16,7 +16,7 @@
 use jsonwebtoken::jwk::{
     AlgorithmParameters, CommonParameters, Jwk, JwkSet, PublicKeyUse, RSAKeyParameters,
 };
-use jsonwebtoken::{Algorithm };
+use jsonwebtoken::Algorithm;
 use openssl::bn::BigNumRef;
 use openssl::pkey::Private;
 use openssl::rsa::Rsa;

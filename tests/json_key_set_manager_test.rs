@@ -13,13 +13,13 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
-use std::time::Duration;
+use crate::fixtures::json_web_key_set::{create_jwk_set, create_rsa_key};
 use anyhow::anyhow;
 use reqwest::StatusCode;
+use std::time::Duration;
 use tower::BoxError;
-use crate::fixtures::json_web_key_set::{create_jwk_set, create_rsa_key};
-use wiremock::{MockServer, Mock, ResponseTemplate};
 use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
 
 use jwks_router_plugin::jwks_manager;
 
@@ -34,21 +34,28 @@ async fn it_retrieves_to_jwks() -> Result<(), BoxError> {
 
     Mock::given(method("GET"))
         .and(path("/jwks.json"))
-        .respond_with(ResponseTemplate::new(StatusCode::OK)
-            .set_body_json(key_set)
-        )
+        .respond_with(ResponseTemplate::new(StatusCode::OK).set_body_json(key_set))
         .mount(&mock_server)
         .await;
 
     let url = format!("{}/jwks.json", &mock_server.uri());
-    let mut mgr = jwks_manager::JwksManager::new(url.as_str(), Some(Duration::from_millis(10))).await?;
+    let mut mgr =
+        jwks_manager::JwksManager::new(url.as_str(), Some(Duration::from_millis(10))).await?;
     let _ = &mgr.poll();
 
     let result_key_set = &mgr.retrieve_key_set()?;
 
-    let jwk = result_key_set.find(kid).ok_or_else(|| anyhow!("Expected to find a JWK with the kid {}", &kid))?;
+    let jwk = result_key_set
+        .find(kid)
+        .ok_or_else(|| anyhow!("Expected to find a JWK with the kid {}", &kid))?;
 
-    assert_eq!(&kid.to_string(), jwk.common.key_id.as_ref().ok_or_else(|| anyhow!("Expected JWK to contain a kid claim"))?);
+    assert_eq!(
+        &kid.to_string(),
+        jwk.common
+            .key_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("Expected JWK to contain a kid claim"))?
+    );
 
     Ok(())
 }
@@ -62,15 +69,14 @@ async fn it_handles_token_refresh_errors() -> Result<(), BoxError> {
 
     Mock::given(method("GET"))
         .and(path("/jwks.json"))
-        .respond_with(ResponseTemplate::new(StatusCode::OK)
-            .set_body_json(key_set)
-        )
+        .respond_with(ResponseTemplate::new(StatusCode::OK).set_body_json(key_set))
         .up_to_n_times(1)
         .mount(&mock_server)
         .await;
 
     let url = format!("{}/jwks.json", &mock_server.uri());
-    let mut mgr = jwks_manager::JwksManager::new(url.as_str(), Some(Duration::from_millis(200))).await?;
+    let mut mgr =
+        jwks_manager::JwksManager::new(url.as_str(), Some(Duration::from_millis(200))).await?;
     let _ = &mgr.poll();
     let _x = &mgr.retrieve_key_set()?;
 
@@ -78,9 +84,17 @@ async fn it_handles_token_refresh_errors() -> Result<(), BoxError> {
 
     let result_key_set = &mgr.retrieve_key_set()?;
 
-    let jwk = result_key_set.find(kid).ok_or_else(|| anyhow!("Expected to find kid {}", &kid))?;
+    let jwk = result_key_set
+        .find(kid)
+        .ok_or_else(|| anyhow!("Expected to find kid {}", &kid))?;
 
-    assert_eq!(&kid.to_string(), jwk.common.key_id.as_ref().ok_or_else(|| anyhow!("Expected claims to contain a kid"))?);
+    assert_eq!(
+        &kid.to_string(),
+        jwk.common
+            .key_id
+            .as_ref()
+            .ok_or_else(|| anyhow!("Expected claims to contain a kid"))?
+    );
 
     Ok(())
 }
