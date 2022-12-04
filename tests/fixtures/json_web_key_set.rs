@@ -13,17 +13,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
-use jwks_router_plugin::plugins::jwk_adapter::Claims;
-use jsonwebtoken::{decode, decode_header, DecodingKey, Header, TokenData, Validation};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
-// use crate::plugins::error::JwtValidationError;
-// use crate::plugins::jwk_adapter::{Claims, JwkAdapter};
 use jsonwebtoken::jwk::{
     AlgorithmParameters, CommonParameters, Jwk, JwkSet, PublicKeyUse, RSAKeyParameters,
 };
-use jsonwebtoken::{encode, Algorithm, EncodingKey};
+use jsonwebtoken::{Algorithm };
 use openssl::bn::BigNumRef;
 use openssl::pkey::Private;
 use openssl::rsa::Rsa;
@@ -57,34 +50,4 @@ pub fn create_jwk_set(rsa: &Rsa<Private>, kid: String) -> JwkSet {
         }),
     };
     JwkSet { keys: vec![key] }
-}
-
-fn valid_claims() -> Claims {
-    Claims {
-        iat: chrono::Local::now().timestamp() as usize,
-        exp: chrono::Local::now().timestamp() as usize + 5000,
-        iss: "https://issuer.example.com".to_owned(),
-        nbf: chrono::Local::now().timestamp() as usize - 5000,
-    }
-}
-
-fn expired_claims() -> Claims {
-    Claims {
-        iat: chrono::Local::now().timestamp() as usize - 50_000,
-        exp: chrono::Local::now().timestamp() as usize - 5000,
-        iss: "https://issuer.example.com".to_owned(),
-        nbf: chrono::Local::now().timestamp() as usize - 50_000,
-    }
-}
-
-pub fn create_token(rsa: &Rsa<Private>, claims: Claims, kid: Option<String>) -> String {
-    let mut header = Header::new(Algorithm::RS256);
-    let private_key = rsa.private_key_to_pem().unwrap();
-    header.kid = kid;
-    encode(
-        &header,
-        &claims,
-        &EncodingKey::from_rsa_pem(&private_key).unwrap(),
-    )
-        .unwrap()
 }

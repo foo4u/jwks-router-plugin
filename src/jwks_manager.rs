@@ -22,6 +22,7 @@ pub enum KeySetError {
 pub struct JwksManager {
     jwks: Arc<RwLock<String>>,
     url: String,
+    poll_interval: Duration,
     reqwuest_client: reqwest::Client,
     // `Option` because in theory one can call `JwksManager::new()` but
     // not manager.poll() later, so `jwks` updater task may not be running at all.
@@ -31,7 +32,7 @@ pub struct JwksManager {
 /// JwksManager handles the JWKS for use with key validation and polling of an external JWKS JSON endpoint
 impl JwksManager {
     /// Returns a new implementation of the JwksManager with a valid JWKS
-    pub async fn new(url: &str) -> Result<Self, BoxError> {
+    pub async fn new(url: &str, poll_interval: Option<Duration>) -> Result<Self, BoxError> {
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .build()?;
@@ -39,14 +40,14 @@ impl JwksManager {
         Ok(Self {
             jwks: Arc::new(RwLock::new(jwks_string)),
             url: url.to_string(),
+            poll_interval: poll_interval.unwrap_or(Duration::from_secs(60 * 5)),
             reqwuest_client: client,
             shutdown_hook: None,
         })
     }
 
     pub fn poll(&mut self) {
-        // poll every 5 minutes for an updated JWKS; adjust as needed
-        let mut poll_interval = tokio::time::interval(Duration::from_secs(60 * 5));
+        let mut poll_interval = tokio::time::interval(self.poll_interval);
         let url = self.url.clone();
         let jwks_string = Arc::clone(&self.jwks);
         let client = self.reqwuest_client.clone();
@@ -58,7 +59,6 @@ impl JwksManager {
         tokio::spawn(async move {
             // Clone the string to safely pass into the loop
             let safe_jwks = Arc::clone(&jwks_string);
-
             // start the loop
             loop {
                 let should_exit = match rx.try_recv() {
@@ -69,33 +69,29 @@ impl JwksManager {
                     // no shutdown message yet
                     Err(TryRecvError::Empty) => false,
                 };
+
+                println!("Got should exit of {}", should_exit);
+
                 if should_exit {
                     break;
                 }
 
-                // move into a subroutine...
-                {
-                    tracing::debug!("Fetching JWKS from {}", &url);
+                tracing::debug!("Fetching JWKS from {}", &url);
 
-                    // ... fetch the JWKS using the fetch_jwks function...
-                    match JwksManager::fetch_key_set(client.clone(), &url).await {
-                        Ok(jwks_response) => {
-                            tracing::debug!("{}", jwks_response);
-
-                            // ... lock RwLock for the write to the Arc'ed safe_jwks string ...
-                            let mut s = safe_jwks.write().unwrap();
-                            *s = jwks_response;
-                            // if line above doesn't work try this:
-                            // s.clear();
-                            // s.push_str(&jwks_response);
-                        }
-                        Err(e) => {
-                            // capture any errors and log out the error to avoid crashing the plugin
-                            tracing::error!("Error received when fetching JWKS: {}", e)
-                        }
+                match JwksManager::fetch_key_set(client.clone(), &url).await {
+                    Ok(jwks_response) => {
+                        tracing::debug!("{}", jwks_response);
+                        // ... lock RwLock for the write to the Arc'ed safe_jwks string ...
+                        let mut s = safe_jwks.write().unwrap();
+                        *s = jwks_response;
+                    }
+                    Err(e) => {
+                        // capture any errors and log out the error to avoid crashing the plugin
+                        tracing::error!("Error received when fetching JWKS: {}", e);
+                        println!("Error received when fetching JWKS: {}", e);
                     }
                 }
-                // ... and finally await the next tokio tick- set by the interval above.
+
                 poll_interval.tick().await;
             }
         });
