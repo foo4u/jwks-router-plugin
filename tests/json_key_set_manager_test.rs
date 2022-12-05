@@ -15,9 +15,9 @@
 */
 use crate::fixtures::json_web_key_set::{create_jwk_set, create_rsa_key};
 use anyhow::{anyhow, Error};
+use jsonwebtoken::jwk::JwkSet;
 use reqwest::StatusCode;
 use std::time::Duration;
-use jsonwebtoken::jwk::JwkSet;
 use tower::BoxError;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -27,10 +27,10 @@ use jwks_router_plugin::jwks_manager;
 mod fixtures;
 
 async fn mock_jwks_response(mock_server: &MockServer, key_set: JwkSet, mock_times: u64) {
-     Mock::given(method("GET"))
+    Mock::given(method("GET"))
         .and(path("/jwks.json"))
         .respond_with(ResponseTemplate::new(StatusCode::OK).set_body_json(key_set))
-         .up_to_n_times(mock_times)
+        .up_to_n_times(mock_times)
         .mount(&mock_server)
         .await;
 }
@@ -48,8 +48,11 @@ async fn it_retrieves_to_jwks() -> Result<(), BoxError> {
 
     mock_jwks_response(&mock_server, key_set, 100).await;
 
-    let mut mgr =
-        jwks_manager::JwksManager::new(mock_jwks_uri(&mock_server).as_str(), Some(Duration::from_millis(10))).await?;
+    let mut mgr = jwks_manager::JwksManager::new(
+        mock_jwks_uri(&mock_server).as_str(),
+        Some(Duration::from_millis(10)),
+    )
+    .await?;
     let _ = &mgr.poll();
 
     let result_key_set = &mgr.retrieve_key_set()?;
@@ -78,8 +81,11 @@ async fn it_handles_token_refresh_errors() -> Result<(), BoxError> {
 
     mock_jwks_response(&mock_server, key_set, 1).await;
 
-    let mut mgr =
-        jwks_manager::JwksManager::new(mock_jwks_uri(&mock_server).as_str(), Some(Duration::from_millis(200))).await?;
+    let mut mgr = jwks_manager::JwksManager::new(
+        mock_jwks_uri(&mock_server).as_str(),
+        Some(Duration::from_millis(200)),
+    )
+    .await?;
     let _ = &mgr.poll();
     let _x = &mgr.retrieve_key_set()?;
 
@@ -106,13 +112,14 @@ async fn it_handles_token_refresh_errors() -> Result<(), BoxError> {
 async fn it_returns_an_error_if_key_set_not_retrievable_on_new() -> Result<(), Error> {
     let mock_server = MockServer::start().await;
 
-    let mgr =
-        jwks_manager::JwksManager::new(mock_jwks_uri(&mock_server).as_str(), Some(Duration::from_millis(200))).await;
+    let mgr = jwks_manager::JwksManager::new(
+        mock_jwks_uri(&mock_server).as_str(),
+        Some(Duration::from_millis(200)),
+    )
+    .await;
 
     match mgr {
-        Ok(_) => { Err(anyhow!("Expected manager startup to fail")) },
-        Err(_e) => {
-            Ok(())
-        }
+        Ok(_) => Err(anyhow!("Expected manager startup to fail")),
+        Err(_e) => Ok(()),
     }
 }
