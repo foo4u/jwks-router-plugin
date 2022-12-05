@@ -19,7 +19,6 @@ use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
 use jsonwebtoken::{decode, decode_header, DecodingKey, Header, TokenData, Validation};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use serde_json::Value;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -83,7 +82,6 @@ impl JwkAdapter {
                 // FIXME: unsafe
                 let decoding_key = DecodingKey::from_ec_components(&ec.x, &ec.y).unwrap();
                 let validation = Validation::new(jwk.common.algorithm.unwrap());
-                validation.set_issuer()
                 decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation)
             }
             _ => return Err(JwtValidationError::UnsupportedAlgorithm(jwt_head.alg)),
