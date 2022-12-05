@@ -2,10 +2,18 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use jsonwebtoken::jwk::JwkSet;
+use reqwest::StatusCode;
+use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
 use tokio::sync::oneshot::Sender;
 use tower::BoxError;
+
+#[derive(Error, Debug)]
+pub enum KeySetError {
+    #[error("JWKS endpoint responded with HTTP {0}")]
+    HttpError(StatusCode),
+}
 
 // JwksManager struct
 //     jwks: stores the jwks keyset within an Arc (for cross channel communication) and RwLock (to avoid race conditions) as a string, which is parsed
@@ -14,6 +22,8 @@ use tower::BoxError;
 pub struct JwksManager {
     jwks: Arc<RwLock<String>>,
     url: String,
+    poll_interval: Duration,
+    reqwuest_client: reqwest::Client,
     // `Option` because in theory one can call `JwksManager::new()` but
     // not manager.poll() later, so `jwks` updater task may not be running at all.
     shutdown_hook: Option<Sender<bool>>,
@@ -22,20 +32,25 @@ pub struct JwksManager {
 /// JwksManager handles the JWKS for use with key validation and polling of an external JWKS JSON endpoint
 impl JwksManager {
     /// Returns a new implementation of the JwksManager with a valid JWKS
-    pub async fn new(url: &str) -> Result<Self, BoxError> {
-        let jwks_string = JwksManager::fetch_key_set(url).await?;
+    pub async fn new(url: &str, poll_interval: Option<Duration>) -> Result<Self, BoxError> {
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .build()?;
+        let jwks_string = JwksManager::fetch_key_set(client.clone(), url).await?;
         Ok(Self {
             jwks: Arc::new(RwLock::new(jwks_string)),
             url: url.to_string(),
+            poll_interval: poll_interval.unwrap_or(Duration::from_secs(60 * 5)),
+            reqwuest_client: client,
             shutdown_hook: None,
         })
     }
 
     pub fn poll(&mut self) {
-        // poll every 5 minutes for an updated JWKS; adjust as needed
-        let mut poll_interval = tokio::time::interval(Duration::from_secs(60 * 5));
+        let mut poll_interval = tokio::time::interval(self.poll_interval);
         let url = self.url.clone();
         let jwks_string = Arc::clone(&self.jwks);
+        let client = self.reqwuest_client.clone();
 
         // This channel will only be used once to signal the shutdown.
         let (tx, mut rx) = oneshot::channel();
@@ -44,7 +59,6 @@ impl JwksManager {
         tokio::spawn(async move {
             // Clone the string to safely pass into the loop
             let safe_jwks = Arc::clone(&jwks_string);
-
             // start the loop
             loop {
                 let should_exit = match rx.try_recv() {
@@ -55,33 +69,29 @@ impl JwksManager {
                     // no shutdown message yet
                     Err(TryRecvError::Empty) => false,
                 };
+
+                println!("Got should exit of {}", should_exit);
+
                 if should_exit {
                     break;
                 }
 
-                // move into a subroutine...
-                {
-                    tracing::debug!("Fetching JWKS from {}", &url);
+                tracing::debug!("Fetching JWKS from {}", &url);
 
-                    // ... fetch the JWKS using the fetch_jwks function...
-                    match JwksManager::fetch_key_set(&url).await {
-                        Ok(jwks_response) => {
-                            tracing::debug!("{}", jwks_response);
-
-                            // ... lock RwLock for the write to the Arc'ed safe_jwks string ...
-                            let mut s = safe_jwks.write().unwrap();
-                            *s = jwks_response;
-                            // if line above doesn't work try this:
-                            // s.clear();
-                            // s.push_str(&jwks_response);
-                        }
-                        Err(e) => {
-                            // capture any errors and log out the error to avoid crashing the plugin
-                            tracing::error!("Error received when fetching JWKS: {}", e)
-                        }
+                match JwksManager::fetch_key_set(client.clone(), &url).await {
+                    Ok(jwks_response) => {
+                        tracing::debug!("{}", jwks_response);
+                        // ... lock RwLock for the write to the Arc'ed safe_jwks string ...
+                        let mut s = safe_jwks.write().unwrap();
+                        *s = jwks_response;
+                    }
+                    Err(e) => {
+                        // capture any errors and log out the error to avoid crashing the plugin
+                        tracing::error!("Error received when fetching JWKS: {}", e);
+                        println!("Error received when fetching JWKS: {}", e);
                     }
                 }
-                // ... and finally await the next tokio tick- set by the interval above.
+
                 poll_interval.tick().await;
             }
         });
@@ -95,21 +105,28 @@ impl JwksManager {
         Ok(jwks)
     }
 
-    // simple function that returns back the JWKS as a string
-    async fn fetch_key_set(url: &str) -> Result<String, BoxError> {
-        let resp = reqwest::get(url).await?.text().await?;
+    /// Retrieves the key set from the given JWKS URL.
+    async fn fetch_key_set(client: reqwest::Client, url: &str) -> Result<String, BoxError> {
+        // let res = client.get(url).await?;
+        let res = client.get(url).send().await?;
+        let text;
 
-        Ok(resp)
+        if res.status() != StatusCode::OK {
+            return Err(BoxError::from(KeySetError::HttpError(res.status())));
+        }
+
+        text = res.text().await?;
+        let key_set: JwkSet = serde_json::from_str(&text)?;
+        tracing::debug!("Retrieved {} for {:?}", url, &key_set);
+
+        Ok(text)
     }
 }
 
 impl Drop for JwksManager {
     fn drop(&mut self) {
-        // `oneshot::Sender::send` consumes `self` so we use `take` to get
-        // an owned `hook` instead of a reference to it.
         if let Some(hook) = self.shutdown_hook.take() {
-            // we send a message to let manager's task know that it should
-            // shutdown.
+            // shutdown
             let _ = hook.send(true);
         }
     }

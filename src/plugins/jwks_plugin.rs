@@ -78,7 +78,9 @@ impl Plugin for JwksPlugin {
         };
 
         // Instantiate the JwksManager (which fetches the initial JWKS value)
-        let mut jm = JwksManager::new(&configuration.jwks_url).await.unwrap();
+        let mut jm = JwksManager::new(&configuration.jwks_url, None)
+            .await
+            .unwrap();
         // start the polling; comment out if you don't want to poll for changes
         jm.poll();
 
