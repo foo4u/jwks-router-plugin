@@ -101,7 +101,10 @@ impl JwkAdapter {
 mod tests {
     use crate::plugins::error::JwtValidationError;
     use crate::plugins::jwk_adapter::{Claims, JwkAdapter};
-    use jsonwebtoken::jwk::{AlgorithmParameters, CommonParameters, EllipticCurveKeyParameters, Jwk, JwkSet, PublicKeyUse, RSAKeyParameters};
+    use jsonwebtoken::jwk::{
+        AlgorithmParameters, CommonParameters, EllipticCurveKeyParameters, Jwk, JwkSet,
+        PublicKeyUse, RSAKeyParameters,
+    };
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use openssl::bn::BigNumRef;
     use openssl::ec::{EcGroup, EcGroupRef, EcKey};
