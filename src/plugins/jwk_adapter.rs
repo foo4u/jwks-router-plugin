@@ -15,7 +15,7 @@
 */
 use crate::plugins::error::JwtValidationError;
 use anyhow::anyhow;
-use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
+use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet};
 use jsonwebtoken::{decode, decode_header, DecodingKey, Header, TokenData, Validation};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -59,6 +59,24 @@ impl JwkAdapter {
         Ok(jwt.to_string())
     }
 
+    fn decoding_key(jwk: &Jwk) -> Result<DecodingKey, JwtValidationError> {
+        match jwk.algorithm {
+            AlgorithmParameters::RSA(ref rsa) => {
+                Ok(DecodingKey::from_rsa_components(&rsa.n, &rsa.e)?)
+            }
+            AlgorithmParameters::EllipticCurve(ref ec) => {
+                Ok(DecodingKey::from_ec_components(&ec.x, &ec.y)?)
+            }
+            _ => {
+                let alg = jwk
+                    .common
+                    .algorithm
+                    .ok_or(JwtValidationError::MissingClaim("alg".to_string()))?;
+                Err(JwtValidationError::UnsupportedAlgorithm(alg))
+            }
+        }
+    }
+
     /// Validates the given JWT against the given jwk_set and returns the claims if valid;
     /// a JwtValidationError otherwise.
     pub fn validate(
@@ -70,22 +88,15 @@ impl JwkAdapter {
         let jwk = jwk_set
             .find(&kid)
             .ok_or(JwtValidationError::UnknownKid(kid))?;
+        let alg = jwk
+            .common
+            .algorithm
+            .ok_or(JwtValidationError::MissingClaim("alg".to_string()))?;
+        let decoding_key = Self::decoding_key(&jwk)?;
+        let validation = Validation::new(alg);
 
-        let token_result = match jwk.algorithm {
-            AlgorithmParameters::RSA(ref rsa) => {
-                // FIXME: unsafe
-                let decoding_key = DecodingKey::from_rsa_components(&rsa.n, &rsa.e).unwrap();
-                let validation = Validation::new(jwk.common.algorithm.unwrap());
-                decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation)
-            }
-            AlgorithmParameters::EllipticCurve(ref ec) => {
-                // FIXME: unsafe
-                let decoding_key = DecodingKey::from_ec_components(&ec.x, &ec.y).unwrap();
-                let validation = Validation::new(jwk.common.algorithm.unwrap());
-                decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation)
-            }
-            _ => return Err(JwtValidationError::UnsupportedAlgorithm(jwt_head.alg)),
-        };
+        let token_result =
+            decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation);
 
         match token_result {
             Ok(token) => Ok(token),
@@ -117,8 +128,8 @@ mod tests {
     }
 
     fn create_ecdsa_key() -> EcKey<Private> {
-        let group = EcGroup::from_curve_name(Nid::ECDSA_WITH_SHA256)?;
-        return EcKey.generate(&group);
+        let group = EcGroup::from_curve_name(Nid::ECDSA_WITH_SHA256).unwrap();
+        return EcKey::generate(&group).unwrap();
     }
 
     fn base64_encode_rsa(big_num_ref: &BigNumRef) -> String {
