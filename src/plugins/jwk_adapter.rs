@@ -101,16 +101,21 @@ impl JwkAdapter {
 mod tests {
     use crate::plugins::error::JwtValidationError;
     use crate::plugins::jwk_adapter::{Claims, JwkAdapter};
-    use jsonwebtoken::jwk::{
-        AlgorithmParameters, CommonParameters, Jwk, JwkSet, PublicKeyUse, RSAKeyParameters,
-    };
+    use jsonwebtoken::jwk::{AlgorithmParameters, CommonParameters, EllipticCurveKeyParameters, Jwk, JwkSet, PublicKeyUse, RSAKeyParameters};
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use openssl::bn::BigNumRef;
+    use openssl::ec::{EcGroup, EcGroupRef, EcKey};
+    use openssl::nid::Nid;
     use openssl::pkey::Private;
     use openssl::rsa::Rsa;
 
     fn create_rsa_key() -> Rsa<Private> {
         Rsa::generate(2048).unwrap()
+    }
+
+    fn create_ecdsa_key() -> EcKey<Private> {
+        let group = EcGroup::from_curve_name(Nid::ECDSA_WITH_SHA256)?;
+        return EcKey.generate(&group);
     }
 
     fn base64_encode_rsa(big_num_ref: &BigNumRef) -> String {
