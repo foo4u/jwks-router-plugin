@@ -20,11 +20,17 @@ use thiserror::Error;
 pub enum JwtValidationError {
     #[error("JWT header missing a kid")]
     MissingKid,
-    #[error("Invalid JWT {source}")]
+    #[error("JWT error: {source}")]
     InvalidToken {
         #[from]
-        source: jsonwebtoken::errors::Error, // backtrace: Backtrace
+        source: jsonwebtoken::errors::Error,
     },
+    #[error("Authorization is not a valid JWT")]
+    InvalidTokenFormat,
+    #[error("Authorization header is not correctly formatted")]
+    InvalidTokenHeader,
+    #[error("Missing required claim: {0}")]
+    MissingClaim(String),
     #[error("JWT kid {0} not found in JWK set")]
     UnknownKid(String),
     #[error("Unsupported JWT algorithm")]

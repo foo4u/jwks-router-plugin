@@ -17,7 +17,7 @@ anyhow = "1.0.55"
 apollo-router = "1.0.0"
 async-trait = "0.1.52"
 futures = "0.3.21"
-jsonwebtoken = "8"
+jsonwebtoken = "8.2.0"
 reqwest = {version="0.11.11"}
 schemars = "0.8.10"
 serde = "1.0.136"

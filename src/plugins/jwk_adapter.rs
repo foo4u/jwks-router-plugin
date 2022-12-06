@@ -14,8 +14,7 @@
  * limitations under the License.
 */
 use crate::plugins::error::JwtValidationError;
-use anyhow::anyhow;
-use jsonwebtoken::jwk::{AlgorithmParameters, JwkSet};
+use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet};
 use jsonwebtoken::{decode, decode_header, DecodingKey, Header, TokenData, Validation};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -35,28 +34,44 @@ impl JwkAdapter {
     pub fn parse_jwt_value(
         token_prefix: &String,
         jwt_value: &str,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<String, JwtValidationError> {
         if !jwt_value
             .to_uppercase()
             .as_str()
             .starts_with(&format!("{} ", token_prefix).to_uppercase())
             && token_prefix.chars().count() > 0
         {
-            return Err(anyhow!("Header is not correctly formatted"));
+            return Err(JwtValidationError::InvalidTokenHeader);
         }
 
-        // We know we have a "space" if the charcount is > 0, since we checked above. Split our string other
-        // in (at most 2) sections.
         let jwt_parts: Vec<&str> = jwt_value.splitn(2, ' ').collect();
 
         if jwt_parts.len() != 2 && token_prefix.chars().count() > 0 {
-            return Err(anyhow!("Authorization header is not correctly formatted"));
+            return Err(JwtValidationError::InvalidTokenFormat);
         }
 
         // Trim off any trailing white space (not valid in BASE64 encoding)
         let jwt = jwt_parts[1].trim_end();
 
         Ok(jwt.to_string())
+    }
+
+    fn decoding_key(jwk: &Jwk) -> Result<DecodingKey, JwtValidationError> {
+        match jwk.algorithm {
+            AlgorithmParameters::RSA(ref rsa) => {
+                Ok(DecodingKey::from_rsa_components(&rsa.n, &rsa.e)?)
+            }
+            AlgorithmParameters::EllipticCurve(ref ec) => {
+                Ok(DecodingKey::from_ec_components(&ec.x, &ec.y)?)
+            }
+            _ => {
+                let alg = jwk
+                    .common
+                    .algorithm
+                    .ok_or(JwtValidationError::MissingClaim("alg".to_string()))?;
+                Err(JwtValidationError::UnsupportedAlgorithm(alg))
+            }
+        }
     }
 
     /// Validates the given JWT against the given jwk_set and returns the claims if valid;
@@ -70,15 +85,15 @@ impl JwkAdapter {
         let jwk = jwk_set
             .find(&kid)
             .ok_or(JwtValidationError::UnknownKid(kid))?;
+        let alg = jwk
+            .common
+            .algorithm
+            .ok_or(JwtValidationError::MissingClaim("alg".to_string()))?;
+        let decoding_key = Self::decoding_key(&jwk)?;
+        let validation = Validation::new(alg);
 
-        let token_result = match jwk.algorithm {
-            AlgorithmParameters::RSA(ref rsa) => {
-                let decoding_key = DecodingKey::from_rsa_components(&rsa.n, &rsa.e).unwrap();
-                let validation = Validation::new(jwk.common.algorithm.unwrap());
-                decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation)
-            }
-            _ => return Err(JwtValidationError::UnsupportedAlgorithm(jwt_head.alg)),
-        };
+        let token_result =
+            decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation);
 
         match token_result {
             Ok(token) => Ok(token),
@@ -95,15 +110,23 @@ mod tests {
     use crate::plugins::error::JwtValidationError;
     use crate::plugins::jwk_adapter::{Claims, JwkAdapter};
     use jsonwebtoken::jwk::{
-        AlgorithmParameters, CommonParameters, Jwk, JwkSet, PublicKeyUse, RSAKeyParameters,
+        AlgorithmParameters, CommonParameters, EllipticCurveKeyParameters, Jwk, JwkSet,
+        PublicKeyUse, RSAKeyParameters,
     };
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use openssl::bn::BigNumRef;
+    use openssl::ec::{EcGroup, EcGroupRef, EcKey};
+    use openssl::nid::Nid;
     use openssl::pkey::Private;
     use openssl::rsa::Rsa;
 
     fn create_rsa_key() -> Rsa<Private> {
         Rsa::generate(2048).unwrap()
+    }
+
+    fn create_ecdsa_key() -> EcKey<Private> {
+        let group = EcGroup::from_curve_name(Nid::ECDSA_WITH_SHA256).unwrap();
+        return EcKey::generate(&group).unwrap();
     }
 
     fn base64_encode_rsa(big_num_ref: &BigNumRef) -> String {
