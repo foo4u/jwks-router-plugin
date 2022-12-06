@@ -25,6 +25,10 @@ pub enum JwtValidationError {
         #[from]
         source: jsonwebtoken::errors::Error,
     },
+    #[error("Authorization is not a valid JWT")]
+    InvalidTokenFormat,
+    #[error("Authorization header is not correctly formatted")]
+    InvalidTokenHeader,
     #[error("Missing required claim: {0}")]
     MissingClaim(String),
     #[error("JWT kid {0} not found in JWK set")]

@@ -14,7 +14,6 @@
  * limitations under the License.
 */
 use crate::plugins::error::JwtValidationError;
-use anyhow::anyhow;
 use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet};
 use jsonwebtoken::{decode, decode_header, DecodingKey, Header, TokenData, Validation};
 use serde::{Deserialize, Serialize};
@@ -35,22 +34,20 @@ impl JwkAdapter {
     pub fn parse_jwt_value(
         token_prefix: &String,
         jwt_value: &str,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<String, JwtValidationError> {
         if !jwt_value
             .to_uppercase()
             .as_str()
             .starts_with(&format!("{} ", token_prefix).to_uppercase())
             && token_prefix.chars().count() > 0
         {
-            return Err(anyhow!("Header is not correctly formatted"));
+            return Err(JwtValidationError::InvalidTokenHeader);
         }
 
-        // We know we have a "space" if the charcount is > 0, since we checked above. Split our string other
-        // in (at most 2) sections.
         let jwt_parts: Vec<&str> = jwt_value.splitn(2, ' ').collect();
 
         if jwt_parts.len() != 2 && token_prefix.chars().count() > 0 {
-            return Err(anyhow!("Authorization header is not correctly formatted"));
+            return Err(JwtValidationError::InvalidTokenFormat);
         }
 
         // Trim off any trailing white space (not valid in BASE64 encoding)
