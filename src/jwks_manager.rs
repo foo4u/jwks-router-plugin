@@ -109,13 +109,12 @@ impl JwksManager {
     async fn fetch_key_set(client: reqwest::Client, url: &str) -> Result<String, BoxError> {
         // let res = client.get(url).await?;
         let res = client.get(url).send().await?;
-        let text;
 
         if res.status() != StatusCode::OK {
             return Err(BoxError::from(KeySetError::HttpError(res.status())));
         }
 
-        text = res.text().await?;
+        let text = res.text().await?;
         let key_set: JwkSet = serde_json::from_str(&text)?;
         tracing::debug!("Retrieved {} for {:?}", url, &key_set);
 

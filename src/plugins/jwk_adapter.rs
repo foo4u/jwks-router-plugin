@@ -67,7 +67,7 @@ impl JwkAdapter {
                 let alg = jwk
                     .common
                     .algorithm
-                    .ok_or(JwtValidationError::MissingClaim("alg".to_string()))?;
+                    .ok_or_else(|| JwtValidationError::MissingClaim("alg".to_string()))?;
                 Err(JwtValidationError::UnsupportedAlgorithm(alg))
             }
         }
@@ -88,8 +88,8 @@ impl JwkAdapter {
         let alg = jwk
             .common
             .algorithm
-            .ok_or(JwtValidationError::MissingClaim("alg".to_string()))?;
-        let decoding_key = Self::decoding_key(&jwk)?;
+            .ok_or_else(|| JwtValidationError::MissingClaim("alg".to_string()))?;
+        let decoding_key = Self::decoding_key(jwk)?;
         let mut validation = Validation::new(alg);
 
         if let Some(iss) = issuer {
