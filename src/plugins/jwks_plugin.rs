@@ -22,6 +22,7 @@ const DEFAULT_TOKEN_PREFIX: &str = "Bearer";
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct Conf {
     jwks_url: String,
+    issuer: Option<String>,
     token_header: Option<String>,
     token_prefix: Option<String>,
 }
@@ -100,6 +101,7 @@ impl Plugin for JwksPlugin {
         service: BoxService<supergraph::Request, supergraph::Response, BoxError>,
     ) -> BoxService<supergraph::Request, supergraph::Response, BoxError> {
         let token_header = self.token_header.clone();
+        let token_issuer = self.configuration.issuer.clone();
         let token_prefix = self.token_prefix.clone();
         let jwks = self
             .jwks_manager
@@ -147,7 +149,7 @@ impl Plugin for JwksPlugin {
                     }
                 };
 
-                if let Err(e) = JwkAdapter::validate(jwt.as_str(), &jwks) {
+                if let Err(e) = JwkAdapter::validate(jwt.as_str(), &jwks, &token_issuer) {
                     let status_code = match e {
                         JwtValidationError::MissingKid => StatusCode::BAD_REQUEST,
                         JwtValidationError::UnknownKid(_) => StatusCode::BAD_REQUEST,

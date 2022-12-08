@@ -17,7 +17,6 @@ use crate::plugins::error::JwtValidationError;
 use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet};
 use jsonwebtoken::{decode, decode_header, DecodingKey, Header, TokenData, Validation};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
@@ -79,7 +78,8 @@ impl JwkAdapter {
     pub fn validate(
         jwt: &str,
         jwk_set: &JwkSet,
-    ) -> Result<TokenData<HashMap<String, serde_json::Value>>, JwtValidationError> {
+        issuer: &Option<String>,
+    ) -> Result<TokenData<Claims>, JwtValidationError> {
         let jwt_head: Header = decode_header(jwt)?;
         let kid = jwt_head.kid.ok_or(JwtValidationError::MissingKid)?;
         let jwk = jwk_set
@@ -90,10 +90,13 @@ impl JwkAdapter {
             .algorithm
             .ok_or(JwtValidationError::MissingClaim("alg".to_string()))?;
         let decoding_key = Self::decoding_key(&jwk)?;
-        let validation = Validation::new(alg);
+        let mut validation = Validation::new(alg);
 
-        let token_result =
-            decode::<HashMap<String, serde_json::Value>>(jwt, &decoding_key, &validation);
+        if let Some(iss) = issuer {
+            validation.set_issuer(&[iss])
+        }
+
+        let token_result = decode::<Claims>(jwt, &decoding_key, &validation);
 
         match token_result {
             Ok(token) => Ok(token),
@@ -194,7 +197,28 @@ mod tests {
 
         let jwk_set = create_jwk_set(&rsa, kid);
 
-        assert!(JwkAdapter::validate(token.as_str(), &jwk_set).is_ok());
+        assert!(JwkAdapter::validate(token.as_str(), &jwk_set, &None).is_ok());
+    }
+
+    #[test]
+    fn validate_jwt_invalid_issuer() -> Result<(), String> {
+        let rsa = create_rsa_key();
+        let kid = "our_id".to_string();
+        let token = create_token(&rsa, valid_claims(), Some(kid.clone()));
+
+        let jwk_set = create_jwk_set(&rsa, kid);
+
+        match JwkAdapter::validate(
+            token.as_str(),
+            &jwk_set,
+            &Some("https://spoofed.example.com/".to_string()),
+        ) {
+            Ok(_) => Err("expected validation to fail".to_string()),
+            Err(e) => match e {
+                JwtValidationError::InvalidToken { .. } => Ok(()),
+                _ => Err("expected invalid token error".to_string()),
+            },
+        }
     }
 
     #[test]
@@ -205,7 +229,7 @@ mod tests {
 
         let jwk_set = create_jwk_set(&rsa, kid.to_string());
 
-        match JwkAdapter::validate(token.as_str(), &jwk_set) {
+        match JwkAdapter::validate(token.as_str(), &jwk_set, &None) {
             Ok(_) => Err("expected validation to fail".to_string()),
             Err(e) => match e {
                 JwtValidationError::MissingKid { .. } => Ok(()),
@@ -222,7 +246,7 @@ mod tests {
 
         let jwk_set = create_jwk_set(&rsa, "fake".to_string());
 
-        match JwkAdapter::validate(token.as_str(), &jwk_set) {
+        match JwkAdapter::validate(token.as_str(), &jwk_set, &None) {
             Ok(_) => return Err("expected validation to fail".to_string()),
             Err(e) => match e {
                 JwtValidationError::UnknownKid { .. } => Ok(()),
@@ -239,7 +263,7 @@ mod tests {
 
         let jwk_set = create_jwk_set(&rsa, kid);
 
-        match JwkAdapter::validate(token.as_str(), &jwk_set) {
+        match JwkAdapter::validate(token.as_str(), &jwk_set, &None) {
             Ok(_) => return Err("expected validation to fail".to_string()),
             Err(e) => match e {
                 JwtValidationError::InvalidToken { .. } => Ok(()),
