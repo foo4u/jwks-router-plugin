@@ -1,3 +1,4 @@
+#![warn(clippy::unwrap_used)]
 use super::error::JwtValidationError;
 use crate::jwks_manager::JwksManager;
 use crate::plugins::jwk_adapter::JwkAdapter;

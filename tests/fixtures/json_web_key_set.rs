@@ -21,6 +21,67 @@ use openssl::bn::BigNumRef;
 use openssl::pkey::Private;
 use openssl::rsa::Rsa;
 
+pub trait JwkProvider<T> {
+    fn create_key(&self) -> T;
+    fn create_jwk(&self, kid: String) -> Jwk;
+    fn create_jwk_set(&self, kid: String) -> JwkSet {
+        JwkSet {
+            keys: vec![self.create_jwk(kid)],
+        }
+    }
+}
+
+pub struct JwkBuilder {
+    // key: K,
+}
+
+fn create_rsa_provider() -> impl JwkProvider<Rsa<Private>> {
+    JwkBuilder {}
+}
+
+pub fn create_rsa_key_set(kids: Vec<String>) -> JwkSet {
+    let provider = create_rsa_provider();
+    let keys = kids
+        .iter()
+        .map(|kid| provider.create_jwk(kid.to_string()))
+        .collect::<Vec<Jwk>>();
+
+    JwkSet { keys }
+}
+
+impl JwkBuilder {
+    fn create_common_parameters(kid: String, algorithm: Algorithm) -> CommonParameters {
+        CommonParameters {
+            public_key_use: (Some(PublicKeyUse::Signature)),
+            key_operations: None,
+            algorithm: Some(algorithm),
+            key_id: Some(kid),
+            x509_url: None,
+            x509_chain: None,
+            x509_sha1_fingerprint: None,
+            x509_sha256_fingerprint: None,
+        }
+    }
+}
+
+impl JwkProvider<Rsa<Private>> for JwkBuilder {
+    fn create_key(&self) -> Rsa<Private> {
+        Rsa::generate(2048).unwrap()
+    }
+
+    fn create_jwk(&self, kid: String) -> Jwk {
+        let key = self.create_key();
+        Jwk {
+            common: JwkBuilder::create_common_parameters(kid, Algorithm::RS256),
+            algorithm: AlgorithmParameters::RSA(RSAKeyParameters {
+                key_type: Default::default(),
+                n: base64_encode_rsa(key.n()),
+                e: base64_encode_rsa(key.e()),
+            }),
+        }
+    }
+}
+
 pub fn create_rsa_key() -> Rsa<Private> {
     Rsa::generate(2048).unwrap()
 }

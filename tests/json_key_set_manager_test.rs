@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
-use crate::fixtures::json_web_key_set::{create_jwk_set, create_rsa_key};
+use crate::fixtures::json_web_key_set::{create_jwk_set, create_rsa_key, create_rsa_key_set};
 use anyhow::{anyhow, Error};
 use jsonwebtoken::jwk::JwkSet;
 use reqwest::StatusCode;
@@ -22,7 +22,7 @@ use tower::BoxError;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use jwks_router_plugin::jwks_manager;
+use jwks_router_plugin::jwks_manager::JwksManager;
 
 mod fixtures;
 
@@ -48,7 +48,7 @@ async fn it_retrieves_to_jwks() -> Result<(), BoxError> {
 
     mock_jwks_response(&mock_server, key_set, 100).await;
 
-    let mut mgr = jwks_manager::JwksManager::new(
+    let mut mgr = JwksManager::new(
         mock_jwks_uri(&mock_server).as_str(),
         Some(Duration::from_millis(10)),
     )
@@ -75,13 +75,12 @@ async fn it_retrieves_to_jwks() -> Result<(), BoxError> {
 #[tokio::test(flavor = "multi_thread")]
 async fn it_handles_token_refresh_errors() -> Result<(), BoxError> {
     let kid = "foo";
-    let rsa = create_rsa_key();
     let mock_server = MockServer::start().await;
-    let key_set = create_jwk_set(&rsa, kid.to_string());
+    let key_set = create_rsa_key_set(vec![kid.to_string()]);
 
     mock_jwks_response(&mock_server, key_set, 1).await;
 
-    let mut mgr = jwks_manager::JwksManager::new(
+    let mut mgr = JwksManager::new(
         mock_jwks_uri(&mock_server).as_str(),
         Some(Duration::from_millis(200)),
     )
@@ -112,7 +111,7 @@ async fn it_handles_token_refresh_errors() -> Result<(), BoxError> {
 async fn it_returns_an_error_if_key_set_not_retrievable_on_new() -> Result<(), Error> {
     let mock_server = MockServer::start().await;
 
-    let mgr = jwks_manager::JwksManager::new(
+    let mgr = JwksManager::new(
         mock_jwks_uri(&mock_server).as_str(),
         Some(Duration::from_millis(200)),
     )
