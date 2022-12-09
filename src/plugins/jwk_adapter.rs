@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
 */
-#![warn(clippy::unwrap_used)]
+#![deny(clippy::unwrap_used)]
 use crate::plugins::error::JwtValidationError;
 use jsonwebtoken::jwk::{AlgorithmParameters, Jwk, JwkSet};
 use jsonwebtoken::{decode, decode_header, DecodingKey, Header, TokenData, Validation};

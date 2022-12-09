@@ -1,3 +1,4 @@
+#![warn(clippy::unwrap_used)]
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
