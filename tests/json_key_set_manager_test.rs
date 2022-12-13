@@ -16,6 +16,7 @@
 use crate::fixtures::json_web_key_set::create_rsa_key_set;
 use anyhow::{anyhow, Error};
 use jsonwebtoken::jwk::JwkSet;
+use reqwest::header::CONTENT_TYPE;
 use reqwest::StatusCode;
 use std::time::Duration;
 use tower::BoxError;
@@ -119,5 +120,31 @@ async fn it_returns_an_error_if_key_set_not_retrievable_on_new() -> Result<(), E
     match mgr {
         Ok(_) => Err(anyhow!("Expected manager startup to fail")),
         Err(_e) => Ok(()),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn it_ignores_unsupported_json_web_keys() -> Result<(), BoxError> {
+    let mock_server = MockServer::start().await;
+    let jwk_body = include_str!("jwks.json");
+
+    Mock::given(method("GET"))
+        .and(path("/jwks.json"))
+        .respond_with(
+            ResponseTemplate::new(StatusCode::OK)
+                .insert_header(CONTENT_TYPE, "application/json")
+                .set_body_string(jwk_body),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let mgr = JwksManager::new(mock_jwks_uri(&mock_server).as_str(), None).await;
+
+    match mgr {
+        Ok(m) => {
+            assert_eq!(m.retrieve_key_set().unwrap().keys.len(), 2);
+            Ok(())
+        }
+        Err(e) => Err(e),
     }
 }
