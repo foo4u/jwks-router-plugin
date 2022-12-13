@@ -1,6 +1,7 @@
+#![warn(clippy::unwrap_used)]
 use super::error::JwtValidationError;
 use crate::jwks_manager::JwksManager;
-use crate::plugins::jwk_adapter::JwkAdapter;
+use crate::plugins::jwt_adapter::JwtAdapter;
 use apollo_router::graphql;
 use apollo_router::layers::ServiceBuilderExt;
 use apollo_router::plugin::Plugin;
@@ -138,7 +139,7 @@ impl Plugin for JwksPlugin {
                 };
 
                 // Trim off any trailing white space (not valid in BASE64 encoding)
-                let jwt = match JwkAdapter::parse_jwt_value(&token_prefix, jwt_value) {
+                let jwt = match JwtAdapter::parse_jwt_value(&token_prefix, jwt_value) {
                     Ok(token) => token,
                     Err(error) => {
                         return JwksPlugin::authentication_error(
@@ -149,7 +150,7 @@ impl Plugin for JwksPlugin {
                     }
                 };
 
-                if let Err(e) = JwkAdapter::validate(jwt.as_str(), &jwks, &token_issuer) {
+                if let Err(e) = JwtAdapter::validate(jwt.as_str(), &jwks, &token_issuer) {
                     let status_code = match e {
                         JwtValidationError::MissingKid => StatusCode::BAD_REQUEST,
                         JwtValidationError::UnknownKid(_) => StatusCode::BAD_REQUEST,
