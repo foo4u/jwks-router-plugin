@@ -39,11 +39,20 @@ fn validate_rsa_jwt() {
     assert!(JwtAdapter::validate(token.as_str(), &jwk_set, &None).is_ok());
 }
 
+#[ignore]
 #[test]
 fn validate_ecdsa_jwt() {
     let kp = create_ecdsa_provider();
     let ec_key = kp.create_key();
     let kid = "our_id".to_string();
+
+    println!(
+        "eckey in pem is: {:?}",
+        &ec_key
+            .private_key_to_pem()
+            .expect(&*"Expected PEM key".to_string())
+    );
+
     let token = kp.create_token(&ec_key, valid_claims(), Some(kid.clone()));
 
     let jwk_set = JwkSet {

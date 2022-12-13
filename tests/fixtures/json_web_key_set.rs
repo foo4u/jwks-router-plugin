@@ -49,10 +49,13 @@ pub trait JwkProvider<T> {
 
 pub struct JwkBuilder {}
 
+// FIXME: this is actually used
+#[allow(dead_code)]
 pub fn create_rsa_provider() -> impl JwkProvider<Rsa<Private>> {
     JwkBuilder {}
 }
 
+#[allow(dead_code)]
 pub fn create_ecdsa_provider() -> impl JwkProvider<EcKey<Private>> {
     JwkBuilder {}
 }
@@ -113,9 +116,8 @@ impl JwkProvider<Rsa<Private>> for JwkBuilder {
 
 impl JwkProvider<EcKey<Private>> for JwkBuilder {
     fn create_key(&self) -> EcKey<Private> {
-        // let group = EcGroup::from_curve_name(Nid::SECP256K1).unwrap();
         let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
-        return EcKey::generate(&group).unwrap();
+        EcKey::generate(&group).unwrap()
     }
 
     fn create_jwk_from_key(&self, key: EcKey<Private>, kid: String) -> Jwk {
@@ -139,12 +141,8 @@ impl JwkProvider<EcKey<Private>> for JwkBuilder {
     fn create_token(&self, key: &EcKey<Private>, claims: Claims, kid: Option<String>) -> String {
         let mut header = Header::new(Algorithm::ES256);
         let private_key = key.private_key_to_pem().unwrap();
+        let encoding_key = EncodingKey::from_ec_pem(&private_key).unwrap();
         header.kid = kid;
-        encode(
-            &header,
-            &claims,
-            &EncodingKey::from_ec_pem(&private_key).unwrap(),
-        )
-        .unwrap()
+        encode(&header, &claims, &encoding_key).unwrap()
     }
 }
