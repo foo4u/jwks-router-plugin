@@ -46,11 +46,18 @@ impl JwksPlugin {
         status: StatusCode,
     ) -> Result<ControlFlow<supergraph::Response, supergraph::Request>, BoxError> {
         let mut ext = JsonMap::with_capacity(1);
+        let message = match status {
+            StatusCode::UNAUTHORIZED => "UNAUTHORIZED",
+            StatusCode::FORBIDDEN => "FORBIDDEN",
+            StatusCode::BAD_REQUEST => "BAD_REQUEST",
+            StatusCode::INTERNAL_SERVER_ERROR => "INTERNAL_SERVER_ERROR",
+            _ => status.as_str(),
+        };
         ext.insert("error", json!(msg));
         let res = supergraph::Response::error_builder()
             .error(
                 graphql::Error::builder()
-                    .message("FORBIDDEN")
+                    .message(message)
                     .extensions(ext)
                     .build(),
             )
