@@ -49,7 +49,7 @@ impl JwksPlugin {
         let message = match status {
             StatusCode::UNAUTHORIZED => "UNAUTHORIZED",
             StatusCode::FORBIDDEN => "FORBIDDEN",
-            StatusCode::BAD_REQUEST => "BAD REQUEST",
+            StatusCode::BAD_REQUEST => "BAD_REQUEST",
             StatusCode::INTERNAL_SERVER_ERROR => "INTERNAL_SERVER_ERROR",
             _ => status.as_str(),
         };
