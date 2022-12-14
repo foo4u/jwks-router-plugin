@@ -17,9 +17,8 @@ use tower::BoxError;
 pub enum KeySetError {
     #[error("JWKS endpoint responded with HTTP {0}")]
     HttpError(StatusCode),
-    #[error("JWK parse failed")]
+    #[error("No keys present on JWK endpoint or parsing failed")]
     ParseError,
-    // TODO: add poison err
 }
 
 #[derive(Deserialize)]
@@ -82,9 +81,8 @@ impl JwksManager {
                     Err(TryRecvError::Empty) => false,
                 };
 
-                println!("Got should exit of {}", should_exit);
-
                 if should_exit {
+                    tracing::info!("Shutting down due to exit request");
                     break;
                 }
 
@@ -136,6 +134,11 @@ impl JwksManager {
                 jwk.ok()
             })
             .collect();
+
+        if keys.is_empty() {
+            return Err(BoxError::from(KeySetError::ParseError {}));
+        }
+
         let key_set: JwkSet = JwkSet { keys };
         tracing::debug!("Retrieved {} for {:?}", url, &key_set);
 
