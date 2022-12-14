@@ -12,7 +12,6 @@ fn valid_claims() -> Claims {
         iat: chrono::Local::now().timestamp() as usize,
         exp: chrono::Local::now().timestamp() as usize + 5000,
         iss: "https://issuer.example.com".to_owned(),
-        nbf: chrono::Local::now().timestamp() as usize - 5000,
     }
 }
 
@@ -21,7 +20,6 @@ fn expired_claims() -> Claims {
         iat: chrono::Local::now().timestamp() as usize - 50_000,
         exp: chrono::Local::now().timestamp() as usize - 5000,
         iss: "https://issuer.example.com".to_owned(),
-        nbf: chrono::Local::now().timestamp() as usize - 50_000,
     }
 }
 
