@@ -55,11 +55,14 @@ pub fn create_rsa_provider() -> impl JwkProvider<Rsa<Private>> {
     JwkBuilder {}
 }
 
+// FIXME: this is actually used
 #[allow(dead_code)]
 pub fn create_ecdsa_provider() -> impl JwkProvider<EcKey<Private>> {
     JwkBuilder {}
 }
 
+// FIXME: this is actually used
+#[allow(dead_code)]
 pub fn create_rsa_key_set(kids: Vec<String>) -> JwkSet {
     let provider = create_rsa_provider();
     let keys = kids

@@ -1,9 +1,12 @@
 #![warn(clippy::unwrap_used)]
+
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use jsonwebtoken::jwk::JwkSet;
+use jsonwebtoken::jwk::{Jwk, JwkSet};
 use reqwest::StatusCode;
+use serde::Deserialize;
+use serde_json::Value;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio::sync::oneshot::error::TryRecvError;
@@ -14,6 +17,13 @@ use tower::BoxError;
 pub enum KeySetError {
     #[error("JWKS endpoint responded with HTTP {0}")]
     HttpError(StatusCode),
+    #[error("No keys present on JWK endpoint or parsing failed")]
+    ParseError,
+}
+
+#[derive(Deserialize)]
+struct JwksData {
+    keys: Vec<Value>,
 }
 
 // JwksManager struct
@@ -71,9 +81,8 @@ impl JwksManager {
                     Err(TryRecvError::Empty) => false,
                 };
 
-                println!("Got should exit of {}", should_exit);
-
                 if should_exit {
+                    tracing::info!("Shutting down due to exit request");
                     break;
                 }
 
@@ -98,17 +107,17 @@ impl JwksManager {
         });
     }
 
-    // Returns the key set (aka the JWKS in a format used by the library)
+    /// Returns the JSON web key set if parsable; an error otherwise.
     pub fn retrieve_key_set(&self) -> Result<JwkSet, BoxError> {
-        // FIXME: is this unsafe?
+        // FIXME: handle unlikely poison error
         let key_set = self.jwks.read().unwrap();
-        let jwks: JwkSet = serde_json::from_str(&key_set)?;
-        Ok(jwks)
+        // .or_else(|_| return Err(BoxError::from(KeySetError::ParseError)));
+        let key_set = serde_json::from_str(&key_set)?;
+        Ok(key_set)
     }
 
     /// Retrieves the key set from the given JWKS URL.
     async fn fetch_key_set(client: reqwest::Client, url: &str) -> Result<String, BoxError> {
-        // let res = client.get(url).await?;
         let res = client.get(url).send().await?;
 
         if res.status() != StatusCode::OK {
@@ -116,10 +125,24 @@ impl JwksManager {
         }
 
         let text = res.text().await?;
-        let key_set: JwkSet = serde_json::from_str(&text)?;
+        let key_data: JwksData = serde_json::from_str(&text)?; // FIMXE no unsafe unwrap
+        let keys: Vec<Jwk> = key_data
+            .keys
+            .iter()
+            .filter_map(|k| {
+                let jwk: Result<Jwk, serde_json::Error> = serde_json::from_value(k.clone());
+                jwk.ok()
+            })
+            .collect();
+
+        if keys.is_empty() {
+            return Err(BoxError::from(KeySetError::ParseError {}));
+        }
+
+        let key_set: JwkSet = JwkSet { keys };
         tracing::debug!("Retrieved {} for {:?}", url, &key_set);
 
-        Ok(text)
+        Ok(serde_json::to_string(&key_set)?)
     }
 }
 
