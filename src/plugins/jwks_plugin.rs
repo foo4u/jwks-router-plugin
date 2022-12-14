@@ -50,7 +50,7 @@ impl JwksPlugin {
         let res = supergraph::Response::error_builder()
             .error(
                 graphql::Error::builder()
-                    .message("FORBIDDEN")
+                    .message(status.as_str())
                     .extensions(ext)
                     .build(),
             )
